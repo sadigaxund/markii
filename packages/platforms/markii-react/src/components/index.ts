@@ -82,6 +82,10 @@ export const defaultRegistry: Registry = {
     component: createLayoutWrapper('center'),
     inline: inlineFromContract('center'),
   },
+  left: {
+    component: createLayoutWrapper('left'),
+    inline: inlineFromContract('left'),
+  },
   right: {
     component: createLayoutWrapper('right'),
     inline: inlineFromContract('right'),

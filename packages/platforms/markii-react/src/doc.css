@@ -705,6 +705,36 @@
   }
 }
 
+/*
+ * `:::row{align=...}` (docs/format.md): `align` is intercepted like on any
+ * other block directive (`render.tsx`/`layout.ts`), wrapping `.mk-row` in
+ * the same generic `mk-align-*` `<div>` every other directive gets — but
+ * `margin-inline: auto` (the rule above, under "layout presets") has
+ * nothing to move: a `.mk-row` grid already fills the document column, so
+ * shrink-to-fit placement of the row itself is meaningless. These three
+ * rules give `align` on a row its own, more useful meaning instead: they
+ * set `text-align` on the row, which every cell's content INHERITS (plain
+ * CSS inheritance — `.mk-cell` sets no `text-align` of its own, so nothing
+ * blocks it). Scoped to `> .mk-row` specifically, so a non-row directive's
+ * `align` wrapper is completely unaffected.
+ *
+ * Locality wins for free: a more local `:::center`/`:::left`/`:::right`
+ * wrapper written inside one cell (`.mk-layout.mk-align-*` above) sets
+ * `text-align` directly on itself, and an element's own declared value
+ * always wins over one it only inherited — no specificity fight needed.
+ */
+.mk-align-left > .mk-row {
+  text-align: left;
+}
+
+.mk-align-center > .mk-row {
+  text-align: center;
+}
+
+.mk-align-right > .mk-row {
+  text-align: right;
+}
+
 /* ---------- cell ---------- */
 
 /*

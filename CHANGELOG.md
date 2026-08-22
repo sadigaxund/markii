@@ -4,6 +4,21 @@ All notable changes to Mark and the `@markii/*` packages are recorded here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Row alignment cascade (`@markii/react`)**: `align` on `:::row` now sets
+  the text alignment inside every cell, instead of the (meaningless) block
+  placement of the full-width row itself. An alignment wrapper written
+  inside a cell still wins, so one cell can opt back out. Invalid values
+  degrade silently, as everywhere in layout. New conformance fixture
+  `27-row-align-left-wrapper`.
+- **`:::left` layout wrapper (`@markii/react`, `@markii/stdlib`)**: a sixth
+  wrapper, symmetric with `:::right`. It matches the default on its own and
+  exists to override an inherited alignment, such as one cell of a
+  `:::row{align=center}`. Contract added to `STANDARD_COMPONENTS`.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

@@ -188,7 +188,7 @@ attributes entirely.
 ### Layout wrappers for plain markdown
 
 Ordinary markdown has nowhere to write attributes: a table or an image has no
-`{...}`. Five wrapper containers carry the same presets to any content:
+`{...}`. Six wrapper containers carry the same presets to any content:
 
 ```
 :::center
@@ -198,11 +198,14 @@ Ordinary markdown has nowhere to write attributes: a table or an image has no
 :::
 ```
 
-The five names are `:::center`, `:::right`, `:::wide`, `:::narrow`, and
-`:::full`. Each applies its preset to everything in its scope. The centering
-wrappers also center text lines, and center or right-align any block that is
-narrower than the column, which tables and images naturally are. There is no
-`:::left` or `:::normal`, because defaults need no wrapper. In a plain
+The six names are `:::center`, `:::right`, `:::left`, `:::wide`,
+`:::narrow`, and `:::full`. Each applies its preset to everything in its
+scope. The alignment wrappers also align text lines, and place any block
+that is narrower than the column, which tables and images naturally are.
+`:::left` matches the default, so it is rarely written on its own; it
+exists to opt one scope back out of an alignment inherited from a
+surrounding container, such as one cell of a centered row. There is no
+`:::normal`, because the width default needs no wrapper. In a plain
 viewer, a wrapper is just two extra fence lines around readable markdown.
 
 ### Side-by-side content
@@ -222,6 +225,13 @@ narrow screens or in plain viewers.
 `cols` accepts 2, 3, or 4; anything else falls back to automatic fitting.
 There are no spans, no per-cell sizes, and no other knobs. It exists so a
 dashboard of stats and charts can share a line, and nothing more.
+
+On a row, `align` means something slightly different than on other blocks.
+A row always spans the full column, so there is nothing to place; instead,
+`:::row{cols=4 align=center}` aligns the content inside every cell. Before
+this, centering a row of stats meant wrapping each cell's content in its
+own `:::center`. A wrapper written inside one cell still wins over the
+row's setting, so `:::left` can opt a single cell back out.
 
 A row counts its direct block children as its cells, so two paragraphs are
 two cells. When one cell needs more than one block, such as a heading and a list

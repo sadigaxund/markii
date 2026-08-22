@@ -64,11 +64,15 @@ and no arbitrary values; an invalid value degrades to the default silently.
 - `width`: `narrow | normal | wide | full`
 - `align`: `left | center | right`; visible only when the block is narrower
   than the column
-- wrapper containers `:::center`, `:::right`, `:::wide`, `:::narrow`,
-  `:::full`: apply the corresponding preset to their contents, including
-  plain markdown; the alignment wrappers also set text alignment in scope
+- wrapper containers `:::center`, `:::right`, `:::left`, `:::wide`,
+  `:::narrow`, `:::full`: apply the corresponding preset to their contents,
+  including plain markdown; the alignment wrappers also set text alignment
+  in scope
 - `:::row{cols=2|3|4}`: the one multi-cell container; equal-width cells,
-  responsive wrap; invalid or absent `cols` degrades to auto-fit
+  responsive wrap; invalid or absent `cols` degrades to auto-fit. On a row,
+  `align` sets the text alignment inside every cell rather than placing the
+  row; an alignment wrapper written inside a cell takes precedence over the
+  row's value
 - `:::cell`: groups several blocks into one `row` cell; attribute-free,
   carries no presentation of its own, and is inert outside a row
 

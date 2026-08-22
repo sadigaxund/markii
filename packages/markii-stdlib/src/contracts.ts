@@ -340,6 +340,10 @@ export const STANDARD_COMPONENTS: Record<string, ComponentContract> = {
     'center',
     'Centers narrower-than-column plain markdown (a table, an image) within its scope and sets text alignment for everything in scope, e.g. `:::center ... :::`.',
   ),
+  left: layoutWrapperContract(
+    'left',
+    'Left-aligns plain markdown within its scope and sets text alignment for everything in scope, e.g. `:::left ... :::`. Mostly matches the ambient default; it exists to override an alignment inherited from an enclosing scope, such as opting one cell back out of `:::row{align=center}`.',
+  ),
   right: layoutWrapperContract(
     'right',
     'Right-aligns narrower-than-column plain markdown (a table, an image) within its scope and sets text alignment for everything in scope, e.g. `:::right ... :::`.',

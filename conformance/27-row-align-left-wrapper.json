@@ -1,0 +1,63 @@
+{
+  "children": [
+    {
+      "attributes": {},
+      "children": [
+        {
+          "children": [
+            {
+              "type": "text",
+              "value": "A left-wrapped paragraph."
+            }
+          ],
+          "type": "paragraph"
+        }
+      ],
+      "name": "left",
+      "type": "containerDirective"
+    },
+    {
+      "attributes": {
+        "align": "center",
+        "cols": "2"
+      },
+      "children": [
+        {
+          "attributes": {},
+          "children": [
+            {
+              "children": [
+                {
+                  "type": "text",
+                  "value": "First cell."
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "name": "cell",
+          "type": "containerDirective"
+        },
+        {
+          "attributes": {},
+          "children": [
+            {
+              "children": [
+                {
+                  "type": "text",
+                  "value": "Second cell."
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "name": "cell",
+          "type": "containerDirective"
+        }
+      ],
+      "name": "row",
+      "type": "containerDirective"
+    }
+  ],
+  "type": "root"
+}

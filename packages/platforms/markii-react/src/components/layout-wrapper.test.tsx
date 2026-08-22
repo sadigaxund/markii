@@ -10,6 +10,7 @@ import {
 
 const EXPECTED_CLASSES: Record<LayoutWrapperPreset, string> = {
   center: 'mk-layout mk-align-center',
+  left: 'mk-layout mk-align-left',
   right: 'mk-layout mk-align-right',
   wide: 'mk-layout mk-width-wide',
   narrow: 'mk-layout mk-width-narrow',
