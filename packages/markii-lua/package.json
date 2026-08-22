@@ -1,6 +1,6 @@
 {
   "name": "@markii/lua",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Sandboxed Lua 5.4 (wasmoon) execution runtime for Mark's document scripting: an empty-env global whitelist, two-tier capability-gated net/cache/bundle access, instruction-count/wall-clock/memory limits, and depth/size-capped Lua<->JS marshaling.",
   "keywords": [
     "markdown",
@@ -44,8 +44,8 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@markii/bundle": "0.3.1",
-    "@markii/runtime": "0.3.1",
+    "@markii/bundle": "0.4.0",
+    "@markii/runtime": "0.4.0",
     "wasmoon": "^1.16.0"
   }
 }

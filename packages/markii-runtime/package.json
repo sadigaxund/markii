@@ -1,6 +1,6 @@
 {
   "name": "@markii/runtime",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Host-side scripting glue for Mark (.mk.md): a null-proto value store and document-script execution with trigger-tier gating (auto/scheduled stay read-only). Framework-agnostic; the script executor is injected by the host (e.g. @markii/lua).",
   "keywords": [
     "markdown",
@@ -42,6 +42,6 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@markii/core": "0.3.1"
+    "@markii/core": "0.4.0"
   }
 }

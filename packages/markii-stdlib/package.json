@@ -1,6 +1,6 @@
 {
   "name": "@markii/stdlib",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Neutral, framework-agnostic standard component contracts for Mark (.mk.md) — the kind/attribute-schema seam every renderer (e.g. @markii/react) implements against. No React, zero dependencies.",
   "keywords": [
     "markdown",
