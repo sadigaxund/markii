@@ -6,6 +6,35 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fetch and cache results are plain Lua data (`@markii/lua`)**:
+  `net.fetch_json`, `net.post`, and `net.patch` used to hand scripts a
+  wasmoon proxy object (userdata) instead of the JSON-shaped Lua data the
+  API documents, and `cache.get` did the same for a stored value on a
+  cache hit. Three script-facing bugs followed (issue #6): returning a
+  nested piece of a fetch result failed with a marshal error, `type()`,
+  `#`, and `pairs` behaved inconsistently on results, and reading a JSON
+  `null` field raised an error instead of yielding `nil`. Responses and
+  cache hits are now decoded inside the sandbox into genuine Lua tables,
+  with depth/node caps enforced host-side before decoding. The cache
+  write path is also bounded now: a value being stored passes through the
+  same capped, cycle-safe walk as a script's return value, so cyclic or
+  oversized values fail cleanly instead of reaching storage, and a
+  host-stored value that exceeds the caps is denied on the hit path the
+  same way an oversized fetch response is. A JSON `null` decodes by one
+  rule: absent as an object field, `false` in an array position (arrays
+  stay dense). The change was adversarially verified; the review closed
+  four hardening gaps before merge, including an array-marker spoof via
+  remote JSON and call-time rebinding of the decoder's primitives.
+  Behavior notes for consumers: the depth/node caps now bound fetched
+  responses (previously only the byte cap effectively applied, since
+  structured results could not be marshaled at all), and a cached value
+  with mixed or sparse table keys now fails the marshal walk explicitly
+  instead of being converted best-effort. New public API: the
+  `CapabilityConfig.marshalLimits` field, plus `checkJsonWithinLimits`
+  and `FETCH_DECODE_ERROR_TAG` exports.
+
 ### Added
 
 - **Row alignment cascade (`@markii/react`)**: `align` on `:::row` now sets

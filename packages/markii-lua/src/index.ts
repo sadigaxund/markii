@@ -11,6 +11,7 @@ export type {
 } from './errors.js';
 export {
   CAPABILITY_ERROR_TAG,
+  FETCH_DECODE_ERROR_TAG,
   MARSHAL_ERROR_TAG,
   ScriptLimitError,
 } from './errors.js';
@@ -47,6 +48,7 @@ export type { MarshalLimits } from './marshal.js';
 export {
   DEFAULT_MARSHAL_LIMITS,
   buildMarshalPrelude,
+  checkJsonWithinLimits,
   finalizeMarshaledValue,
   wrapUserCode,
 } from './marshal.js';

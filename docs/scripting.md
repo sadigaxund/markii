@@ -118,6 +118,25 @@ end)
 The TTL doubles as a rate limiter, even for manual runs. Consumers always
 see the usual freshness status: fresh, stale, or missing.
 
+One habit is worth building early: validate inside the function you hand to
+`cache.get`. The cache stores whatever that function returns, and APIs
+sometimes return an error body with a 200 status. Stored once, a bad reply
+is served for the whole TTL. Raising instead keeps it out:
+
+```lua
+return cache.get("gh", 3600, function()
+  local r = net.fetch_json("https://api.github.com/repos/x/y")
+  if r.message then
+    error("GitHub API: " .. r.message)
+  end
+  return r
+end)
+```
+
+An error inside the function aborts the run before anything is stored, so
+the cache only ever remembers good data, and the last good value keeps
+serving consumers through an API hiccup.
+
 ## Sharing values between notes
 
 Values are note-scoped by default. Cross-note sharing, the case where one
@@ -204,6 +223,18 @@ small, flat, and holdable in one head:
 - `net.fetch_json(url)`: fetch and parse JSON from a granted host
 - `cache.get(key, ttl, fn)`: return cached value or compute and store it
 - `bundle.read(path)` / `bundle.write(path, data)`: bundle-scoped files
+
+What these hand back is ordinary Lua data, with no wrapper objects and no
+special access rules. A fetched result is a plain table: `type()` says
+`"table"`, `#` and `ipairs` work on arrays, and any part of it can go
+straight into the script's return value. A JSON `null` follows one simple
+rule: as an object field it is simply absent, so reading it gives `nil`
+rather than an error; inside an array it becomes `false`, so the array
+stays dense and `#` still tells the truth. A value served from the cache
+comes back in exactly the same plain shape it was stored in. None of this
+needs a defensive `pcall`. Responses are bounded by the sandbox's size
+limits; a response too large or too deeply nested fails the fetch with a
+clear error instead of reaching the script partially.
 
 The available Lua standard library is a curated slice: `string`, `table`,
 and `math`. There is no `os`, no `io`, and no raw `require`; everything a

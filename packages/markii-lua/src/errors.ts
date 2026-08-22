@@ -52,6 +52,23 @@ export const CAPABILITY_ERROR_TAG = 'MARK_CAPABILITY';
 /** Prefix tag for a marshal-time rejection raised from the in-Lua marshal walk (see `./marshal`). */
 export const MARSHAL_ERROR_TAG = 'MARK_MARSHAL';
 
+/**
+ * Prefix tag for a rejection raised from the in-Lua JSON decoder
+ * (`./json-decode`'s `__smd_json_decode`, used by `net.fetch_json` — see
+ * `./capabilities`). Under normal operation this never fires: the
+ * depth/node budget is enforced BEFORE the fetched body ever reaches Lua
+ * (`./capabilities`' `checkJsonWithinLimits` call, using the same
+ * `MarshalLimits` as `./marshal`, recorded as an ordinary capability denial
+ * — see `CAPABILITY_ERROR_TAG` above). The Lua-side `maxDepth` check this
+ * tag backs is a pure recursion-depth (C-stack) safety net for the case
+ * where that pre-check and the decoder's own walk of the exact same text
+ * would ever disagree — not a second, independently-tuned limit. Like
+ * `MARSHAL_ERROR_TAG`, this is NOT a classification signal `sandbox.ts`
+ * inspects: a script forging this text produces an ordinary `'runtime'`
+ * failure, same as any other `error()` call.
+ */
+export const FETCH_DECODE_ERROR_TAG = 'MARK_FETCH_DECODE';
+
 /** The limits a run can breach; see `./limits`. */
 export type ScriptLimitKind = 'instructions' | 'timeout' | 'memory';
 

@@ -181,8 +181,77 @@ export function wrapUserCode(code: string): string {
   return `local function __smd_user_chunk()\n${code}\nend\nreturn __smd_marshal_root(__smd_user_chunk())`;
 }
 
-/** True array marker set by the Lua-side marshal walk (see `buildMarshalPrelude`). */
-const ARRAY_MARKER = '__smd_is_array';
+/**
+ * Depth/node budget check for a plain, already-`JSON.parse`d JS value
+ * (arrays/objects/strings/numbers/booleans/`null`; never a cycle, since
+ * `JSON.parse` output is always a tree). Used by `./capabilities`' `net.fetch_json`
+ * to reject an oversized/too-deep fetch response BEFORE the raw JSON text
+ * is ever handed to Lua for decoding (`./json-decode`) — the JS-side
+ * mirror of what `buildMarshalPrelude`'s in-Lua walk does for the return
+ * value going the OTHER direction. Counting rule matches that walk exactly
+ * so the two budgets read as one shared limit, not two independently-tuned
+ * ones: every value (leaf or container) counts as one node, and `depth`
+ * increases by one for each level of array/object nesting.
+ */
+export function checkJsonWithinLimits(
+  value: unknown,
+  limits: MarshalLimits,
+): { ok: true } | { ok: false; reason: 'depth' | 'nodes'; message: string } {
+  let nodes = 0;
+
+  function walk(
+    v: unknown,
+    depth: number,
+  ): { ok: true } | { ok: false; reason: 'depth' | 'nodes'; message: string } {
+    nodes++;
+    if (nodes > limits.maxNodes) {
+      return {
+        ok: false,
+        reason: 'nodes',
+        message: `exceeds the ${limits.maxNodes}-node limit`,
+      };
+    }
+    if (v !== null && typeof v === 'object') {
+      if (depth >= limits.maxDepth) {
+        return {
+          ok: false,
+          reason: 'depth',
+          message: `exceeds the ${limits.maxDepth}-level depth limit`,
+        };
+      }
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          const r = walk(item, depth + 1);
+          if (!r.ok) return r;
+        }
+      } else {
+        for (const val of Object.values(v as Record<string, unknown>)) {
+          const r = walk(val, depth + 1);
+          if (!r.ok) return r;
+        }
+      }
+    }
+    return { ok: true };
+  }
+
+  return walk(value, 0);
+}
+
+/**
+ * True array marker set by the Lua-side marshal walk (see
+ * `buildMarshalPrelude`). Exported (not just module-private) so
+ * `./json-decode`'s JSON decoder can recognize and DROP this exact key if
+ * it ever appears as an object key in attacker-controlled JSON (adversarial
+ * finding A4): without that, a remote response body like
+ * `{"__smd_is_array":true,"1":"a","2":"b","x":"kept"}` would decode to an
+ * ordinary Lua table carrying this same marker key, and `finalizeMarshaledValue`
+ * below — which has no way to tell "the trusted marshal walk set this" apart
+ * from "the JSON itself happened to contain a key with this exact name" —
+ * would then convert it to a JS ARRAY on the way out, silently reshaping
+ * attacker-controlled data and dropping the object's real keys. See
+ * `./json-decode`'s decoder for where the corresponding key is dropped.
+ */
+export const ARRAY_MARKER = '__smd_is_array';
 
 /**
  * Final JS-side pass over the value wasmoon already converted from the

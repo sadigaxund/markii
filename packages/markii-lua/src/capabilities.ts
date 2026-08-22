@@ -1,5 +1,14 @@
 import type { ScriptView } from '@markii/bundle';
-import { CAPABILITY_ERROR_TAG } from './errors.js';
+import { LuaMultiReturn } from 'wasmoon';
+import { CAPABILITY_ERROR_TAG, MARSHAL_ERROR_TAG } from './errors.js';
+import { buildJsonDecodePrelude } from './json-decode.js';
+import {
+  buildMarshalPrelude,
+  checkJsonWithinLimits,
+  DEFAULT_MARSHAL_LIMITS,
+  finalizeMarshaledValue,
+  type MarshalLimits,
+} from './marshal.js';
 
 /** A GET/POST/PATCH result handed back to Lua as `{status=..., body=...}`. */
 export interface NetResponse {
@@ -59,6 +68,18 @@ export interface CapabilityConfig {
   /** Bundle-scoped filesystem view (spec §11) — already capability-restricted by `@markii/bundle`'s `createScriptView`; this module delegates to it, never re-implements the path-jail or write policy. */
   bundle?: ScriptView;
   maxFetchBytes?: number;
+  /**
+   * Depth/node budget for a `net.fetch_json` response, checked (via
+   * `./marshal`'s `checkJsonWithinLimits`) against the parsed JSON BEFORE
+   * the raw body text is ever handed to Lua's `__smd_json_decode`
+   * (`./json-decode`) — see that module's doc comment for the full
+   * rationale (GitHub issue #6). Defaults to `./marshal`'s
+   * `DEFAULT_MARSHAL_LIMITS`, the same defaults `runScript` already uses
+   * for the return-value marshal walk, so a fetched response and a
+   * script's own return value are held to one shared limit by default,
+   * not two independently-tuned ones.
+   */
+  marshalLimits?: MarshalLimits;
 }
 
 export const DEFAULT_MAX_FETCH_BYTES = 2_000_000;
@@ -186,8 +207,39 @@ export function buildCapabilities(config: CapabilityConfig): {
   denials: CapabilityDenials;
 } {
   const maxFetchBytes = config.maxFetchBytes ?? DEFAULT_MAX_FETCH_BYTES;
+  const marshalLimits: MarshalLimits =
+    config.marshalLimits ?? DEFAULT_MARSHAL_LIMITS;
   const rawGlobals: Record<string, (...args: never[]) => Promise<unknown>> = {};
   const preludeParts: string[] = [];
+
+  // `__smd_json_decode` (`./json-decode`) is needed by BOTH `net.fetch_json`
+  // and `cache.get` (a cache hit re-enters Lua the same way a fetch result
+  // does — see the `cache` section below) — injected at most once
+  // regardless of how many callers need it. Re-defining the same Lua
+  // global twice would be harmless (Lua allows redefining a function), but
+  // there is no reason to emit the prelude source twice.
+  let jsonDecodePreludeInjected = false;
+  function ensureJsonDecodePrelude(): void {
+    if (jsonDecodePreludeInjected) return;
+    jsonDecodePreludeInjected = true;
+    preludeParts.push(buildJsonDecodePrelude(marshalLimits));
+  }
+
+  // `__smd_marshal_root` (`./marshal`'s `buildMarshalPrelude`) is normally
+  // injected once, unconditionally, by `sandbox.ts` — AFTER this module's
+  // own prelude. `cache.get`'s internal refresh path (below) needs it
+  // available too, and needs it self-contained here rather than assuming
+  // that injection order: this module is exercised standalone (see
+  // `capabilities.test.ts`, which never touches `sandbox.ts`), so it must
+  // not depend on a caller injecting it. Re-running `sandbox.ts`'s own
+  // injection afterward just redefines the same idempotent Lua functions —
+  // harmless.
+  let marshalPreludeInjected = false;
+  function ensureMarshalPrelude(): void {
+    if (marshalPreludeInjected) return;
+    marshalPreludeInjected = true;
+    preludeParts.push(buildMarshalPrelude(marshalLimits));
+  }
 
   // Out-of-band denial record — see `CapabilityDenials`'s doc comment. Every
   // site below that throws a `capabilityError` records here FIRST, so
@@ -244,13 +296,43 @@ export function buildCapabilities(config: CapabilityConfig): {
         recordDenial('denied', message);
         throw capabilityError(message);
       }
-      return parsed;
+      // Depth/node budget, checked HERE on the plain parsed JS value and
+      // BEFORE the raw text is ever handed to Lua — see `./json-decode`'s
+      // doc comment (GitHub issue #6) for why decoding happens entirely in
+      // Lua, and `MarshalLimits`' doc comment above for why this reuses the
+      // same budget the return-value marshal walk already enforces.
+      const budgetCheck = checkJsonWithinLimits(parsed, marshalLimits);
+      if (!budgetCheck.ok) {
+        const message = `fetch response for "${url}" ${budgetCheck.message}`;
+        recordDenial('denied', message);
+        throw capabilityError(message);
+      }
+      // Hand back the RAW JSON TEXT, not the parsed JS value: any object or
+      // array crossing this JS->Lua boundary as-is would arrive in Lua as a
+      // wasmoon `js_proxy` userdata, not a genuine table (see
+      // `./json-decode`'s doc comment for the full mechanism and why that
+      // breaks `type()`/`#`/marshaling a nested return value, and silently
+      // raises on a `null` field read). Strings, unlike objects/arrays, are
+      // scalars and cross the boundary cleanly with no proxy involved; the
+      // prelude below decodes this text into a genuine Lua table entirely
+      // in Lua (`__smd_json_decode`, `./json-decode`).
+      return res.body;
     }) as (...args: never[]) => Promise<unknown>;
 
+    ensureJsonDecodePrelude();
     preludeParts.push(`
 local __smd_net_get = __smd_net_get_raw
+-- Captured into a local HERE, at prelude-definition time (this whole
+-- prelude runs once, before any untrusted script code) -- NOT resolved as
+-- a dynamic global lookup inside \`net.fetch_json\`'s own body. Otherwise a
+-- script could do \`__smd_json_decode = function(t) return t end\` before a
+-- LATER \`net.fetch_json\` call and neuter the decoder's own depth guard and
+-- array-marker stripping entirely (adversarial finding A2) -- the same
+-- rebinding risk \`./json-decode\`'s own doc comment (finding A1) already
+-- closes for the primitives the decoder uses internally.
+local __smd_net_get_json_decode = __smd_json_decode
 __smd_net_get_raw = nil
-net.fetch_json = function(url) return __smd_net_get(url):await() end
+net.fetch_json = function(url) return __smd_net_get_json_decode(__smd_net_get(url):await()) end
 `);
   }
 
@@ -275,12 +357,25 @@ net.fetch_json = function(url) return __smd_net_get(url):await() end
         recordDenial('denied', message);
         throw capabilityError(message);
       }
-      return config.net!.post!(url, body);
+      const res = await config.net!.post!(url, body);
+      // As with `net.fetch_json` above (GitHub issue #6): a plain JS object
+      // (even one this shallow) crosses into Lua as a `js_proxy` userdata,
+      // not a genuine table. `status`/`body` are both scalars, so instead
+      // of proxying the whole response object, resolve with a
+      // `LuaMultiReturn` — `:await()` recognizes that and expands it into
+      // TWO separate Lua return values (see `wasmoon`'s promise
+      // `await`/`MultiReturn` handling) — and let the trusted prelude below
+      // rebuild a real `{status=..., body=...}` table out of ordinary Lua
+      // table-constructor syntax.
+      return LuaMultiReturn.of<string | number>(res.status, res.body);
     }) as (...args: never[]) => Promise<unknown>;
     preludeParts.push(`
 local __smd_net_post = __smd_net_post_raw
 __smd_net_post_raw = nil
-net.post = function(url, body) return __smd_net_post(url, body):await() end
+net.post = function(url, body)
+  local status, respBody = __smd_net_post(url, body):await()
+  return { status = status, body = respBody }
+end
 `);
   } else if (
     // Mirrors the 'manual' condition above EXACTLY except for the tier, so
@@ -320,12 +415,18 @@ net.post = function(url, body) return __smd_net_post_blocked(url, body):await() 
         recordDenial('denied', message);
         throw capabilityError(message);
       }
-      return config.net!.patch!(url, body);
+      const res = await config.net!.patch!(url, body);
+      // Same fix as `net.post` above (GitHub issue #6) — see that block's
+      // comment for the full mechanism.
+      return LuaMultiReturn.of<string | number>(res.status, res.body);
     }) as (...args: never[]) => Promise<unknown>;
     preludeParts.push(`
 local __smd_net_patch = __smd_net_patch_raw
 __smd_net_patch_raw = nil
-net.patch = function(url, body) return __smd_net_patch(url, body):await() end
+net.patch = function(url, body)
+  local status, respBody = __smd_net_patch(url, body):await()
+  return { status = status, body = respBody }
+end
 `);
   } else if (
     // Same mirroring as the POST stub above — see its comment.
@@ -356,15 +457,104 @@ net.patch = function(url, body) return __smd_net_patch_blocked(url, body):await(
   // ever exposes plain read/write primitives (`__smd_cache_get_raw`,
   // `__smd_cache_set_raw`); the read-if-fresh-else-run-fn CONTROL FLOW is
   // Lua calling Lua, never JS calling Lua.
+  //
+  // ## The same issue #6 proxy problem, on a cache HIT
+  //
+  // A stored value that came from `net.fetch_json` (the canonical idiom
+  // documented in `docs/scripting.md`: `cache.get(key, ttl, function()
+  // return net.fetch_json(url) end)`) is exactly the JSON-shaped data
+  // `./json-decode`'s doc comment already covers. Handing a cache HIT's
+  // stored value back to Lua as-is has the identical fix requirement as
+  // `net.fetch_json`'s own result: it must not cross the boundary as a raw
+  // JS object (a `js_proxy` userdata), or `type()`/`#`/marshaling a nested
+  // hit result breaks exactly like an un-fixed `fetch_json` would.
+  //
+  // The fix mirrors `net.fetch_json` exactly and reuses BOTH of its pieces:
+  //   - On `cache.get`'s READ side, the raw JS function JSON-encodes the
+  //     stored value (`JSON.stringify`, on a value that's already
+  //     plain/JSON-safe — see the WRITE side below) and hands back that
+  //     TEXT, a scalar with no proxy involved, alongside the plain-number
+  //     `storedAtMs`, via one `LuaMultiReturn` (same technique
+  //     `net.post`/`net.patch` use for their two-field response). Lua then
+  //     decodes it with the SAME `__smd_json_decode` fetch_json already
+  //     uses (`ensureJsonDecodePrelude`).
+  //   - On the WRITE side (an internal refresh, never a public
+  //     `cache.set` — see `docs/scripting.md`: `cache.get` is the only
+  //     public cache API), the value `fn()` computed is run through the
+  //     SAME capped, cycle-safe Lua walk (`__smd_marshal_root`,
+  //     `./marshal`'s `buildMarshalPrelude`) already used to bound a
+  //     script's own top-level return value, BEFORE it ever crosses to JS
+  //     as a function argument. This closes a real, separate gap: passing
+  //     an uncapped Lua table as a host-function argument uses wasmoon's
+  //     own eager, unbounded table->JS conversion (see `./marshal`'s doc
+  //     comment on why the return-value path never trusts that
+  //     conversion) — without this walk, `cache.get(key, ttl, function()
+  //     return hugeOrCyclicTable end)` would hit that same unbounded cost,
+  //     and a cyclic value would later crash the JS-side `JSON.stringify`
+  //     outright. `finalizeMarshaledValue` (the same JS-side pass the
+  //     top-level return path already runs) then strips the walk's array
+  //     marker and rejects a non-finite number, before the plain,
+  //     JSON-safe result is handed to `config.cache!.set` — so
+  //     `CacheEntry.value`'s STORAGE shape is unchanged (still whatever
+  //     plain value the host's `CacheProvider` already expects; e.g. a
+  //     bundle's `cache/*.json` file), and a script's own scalar values
+  //     (numbers, strings, booleans) round-trip exactly as before.
+  //   - Either enforcement failing raises the existing, already-classified
+  //     `MARSHAL_ERROR_TAG` error (`sandbox.ts` already recognizes it as
+  //     `kind: 'marshal'`) — no new error taxonomy for this path.
   if (config.cache) {
-    rawGlobals.__smd_cache_get_raw = (async (key: string) =>
-      config.cache!.get(key)) as (...args: never[]) => Promise<unknown>;
+    ensureJsonDecodePrelude();
+    ensureMarshalPrelude();
+    rawGlobals.__smd_cache_get_raw = (async (key: string) => {
+      const entry = await config.cache!.get(key);
+      if (entry === undefined) return undefined;
+      // Depth/node budget, checked BEFORE the stored value is ever encoded
+      // to text and handed to Lua — mirrors `net.fetch_json`'s own
+      // pre-check exactly (adversarial finding B2). A host-stored value is
+      // exactly as untrusted as a remote fetch body — a bundle's
+      // `cache/*.json` file, for instance, can be edited by anything with
+      // write access to the bundle, not just this sandbox's own WRITE side
+      // below — so without this check, a 300k-element cached array reached
+      // the script completely uncapped even though the FETCH path was
+      // already capped.
+      const budgetCheck = checkJsonWithinLimits(entry.value, marshalLimits);
+      if (!budgetCheck.ok) {
+        const message = `cached value for "${key}" ${budgetCheck.message}`;
+        recordDenial('denied', message);
+        throw capabilityError(message);
+      }
+      let text: string;
+      try {
+        // A cyclic or BigInt-bearing stored value throws here. This
+        // module's own WRITE side (`__smd_cache_set_raw` below) already
+        // rejects both before ever storing anything, but a `CacheProvider`
+        // is host-controlled storage that something other than this
+        // sandbox could have written — turn that into the same clean,
+        // catchable denial instead of an unclassified throw out of the
+        // capability layer.
+        const encoded = JSON.stringify(entry.value);
+        text = encoded === undefined ? 'null' : encoded;
+      } catch (err) {
+        const message = `cached value for "${key}" could not be encoded: ${describeThrown(err)}`;
+        recordDenial('denied', message);
+        throw capabilityError(message);
+      }
+      return LuaMultiReturn.of<string | number>(text, entry.storedAtMs);
+    }) as (...args: never[]) => Promise<unknown>;
     rawGlobals.__smd_cache_set_raw = (async (
       key: string,
-      value: unknown,
+      // Already the output of `__smd_marshal_root` (`./marshal`'s
+      // `buildMarshalPrelude`) by the time it reaches here — see the
+      // prelude below — so this is a bounded, cycle-free, marker-tagged
+      // plain value (or a scalar), never a raw uncapped Lua table.
+      marshaledValue: unknown,
       storedAtMs: number,
     ) => {
-      await config.cache!.set(key, { value, storedAtMs });
+      const finalized = finalizeMarshaledValue(marshaledValue);
+      if (!finalized.ok) {
+        throw new Error(`${MARSHAL_ERROR_TAG}:${finalized.reason}`);
+      }
+      await config.cache!.set(key, { value: finalized.value, storedAtMs });
       return true;
     }) as (...args: never[]) => Promise<unknown>;
     // `now` (for TTL freshness) is computed in JS, once per cache.get
@@ -380,20 +570,36 @@ net.patch = function(url, body) return __smd_net_patch_blocked(url, body):await(
 local __smd_cache_get = __smd_cache_get_raw
 local __smd_cache_set = __smd_cache_set_raw
 local __smd_now_ms = __smd_now_ms_raw
+-- Captured into locals HERE, at prelude-definition time -- NOT resolved as
+-- dynamic globals inside cache.get's own body (adversarial findings A2 and
+-- D1). Without this, a script could do \`__smd_json_decode = function(t)
+-- return t end\` (A2) or, more seriously, \`__smd_marshal_root = function(v)
+-- return v end\` (D1) before a LATER cache.get call: the marshal-root
+-- rebind would send an UNBOUNDED, uncapped table straight through
+-- wasmoon's own eager table->JS conversion into the store the moment the
+-- rebound "identity" function handed it back, since the write side
+-- (\`__smd_cache_set_raw\` below) would then be receiving whatever the
+-- script substituted with no cap ever having run -- the return-value path
+-- was never vulnerable to this trick only because of an unrelated
+-- evaluation-order accident (its own \`__smd_marshal_root\` call happens
+-- inside \`wrapUserCode\`'s generated code, evaluated before the script's
+-- own top-level statements finish), not because the global was pinned.
+local __smd_cache_json_decode = __smd_json_decode
+local __smd_cache_marshal_root = __smd_marshal_root
 __smd_cache_get_raw = nil
 __smd_cache_set_raw = nil
 __smd_now_ms_raw = nil
 cache = cache or {}
 cache.get = function(key, ttl, fn)
-  local existing = __smd_cache_get(key):await()
-  if existing ~= nil then
+  local text, storedAtMs = __smd_cache_get(key):await()
+  if text ~= nil then
     local now = __smd_now_ms():await()
-    if (now - existing.storedAtMs) < (ttl * 1000) then
-      return existing.value
+    if (now - storedAtMs) < (ttl * 1000) then
+      return __smd_cache_json_decode(text)
     end
   end
   local value = fn()
-  __smd_cache_set(key, value, __smd_now_ms():await()):await()
+  __smd_cache_set(key, __smd_cache_marshal_root(value), __smd_now_ms():await()):await()
   return value
 end
 `);

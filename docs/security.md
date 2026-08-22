@@ -137,6 +137,37 @@ hang, and both were fixed in commit `272f1b6`:
 
 Both fixes were verified by independent re-runs of the original probes.
 
+A third finding was reported through real-world script writing rather than
+the audit (August 2026, issue #6). The `net` capability returned fetch
+results to Lua as the engine's own proxy objects instead of plain tables,
+and `cache.get` did the same for a stored value on a cache hit. Proxies
+leaked engine semantics into scripts: `type()` misreported them, returning
+a nested piece of a result was rejected by the marshaller, and reading a
+field whose JSON value was `null` raised an error instead of giving `nil`.
+The fix removes proxies from the script-facing surface entirely. Fetch
+responses and cache hits are decoded inside the sandbox by a trusted JSON
+decoder that builds genuine Lua tables, with the depth and node caps
+enforced on the host side before decoding and reported as an ordinary
+capability denial. The same change bounded the cache write path: a value
+being stored now passes through the same capped, cycle-safe walk a
+script's own return value gets, so an oversized or cyclic value fails
+cleanly instead of reaching storage. The security posture is unchanged:
+nothing non-serializable crosses into the sandbox through these paths, and
+the capability tier gating is untouched.
+
+The decoder change was itself verified adversarially before merge, with
+executed probes rather than review alone. That pass confirmed the decoder
+introduces no escape and handles malformed input, hostile keys, and large
+or deeply nested documents cleanly, and it surfaced four gaps that were
+fixed before the change shipped: remote JSON could spoof the marshaller's
+internal array marker and change a value's type on the host side; the
+cache-hit path skipped the depth and node caps the fetch path enforces; a
+script could disable the cache write bound by rebinding a global the
+prelude read at call time; and the decoder resolved its own Lua primitives
+dynamically, repeating the pattern the earlier audit's first finding had
+already fixed in the marshaller. All four fixes carry regression tests
+that re-run the original probes.
+
 Three areas remain intentionally outside the audited surface, and are
 tracked rather than forgotten: the four known hang reproductions are covered
 by dedicated deadlock tests rather than re-executed in CI (re-triggering a

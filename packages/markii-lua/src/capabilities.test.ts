@@ -139,6 +139,196 @@ describe('buildCapabilities — net.fetch_json', () => {
   });
 });
 
+// GitHub issue #6: net.fetch_json used to hand the script wasmoon's own
+// JS->Lua proxy (a `js_proxy` userdata) instead of a genuine Lua table.
+// This block asserts the fix directly: fetch_json's result now behaves
+// exactly like a table the script built itself.
+describe('buildCapabilities — net.fetch_json delivers plain Lua data (issue #6)', () => {
+  it('a nested array taken directly from the result round-trips as a real array (used to fail with MARK_MARSHAL:type:userdata)', async () => {
+    const r = await run(
+      'return net.fetch_json("https://api.example.com/x").tags',
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({
+          status: 200,
+          body: '{"tags": ["a", "b", "c"]}',
+        })),
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: ['a', 'b', 'c'] });
+  });
+
+  it('a nested object taken directly from the result round-trips as a real object', async () => {
+    const r = await run(
+      'return net.fetch_json("https://api.example.com/x").owner',
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({
+          status: 200,
+          body: '{"owner": {"name": "ada", "id": 7}}',
+        })),
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { name: 'ada', id: 7 } });
+  });
+
+  it('a JSON null field reads as nil with no error, and is absent from a returned table', async () => {
+    const r = await run(
+      `
+      local breed = net.fetch_json("https://api.example.com/x")
+      local wiki = breed.wikipedia_url
+      return { name = breed.name, wiki_is_nil = wiki == nil, echoed = breed }
+      `,
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({
+          status: 200,
+          body: '{"name": "collie", "wikipedia_url": null}',
+        })),
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: { name: 'collie', wiki_is_nil: true, echoed: { name: 'collie' } },
+    });
+  });
+
+  it('a top-level JSON array supports type(), # and ipairs like an ordinary Lua table', async () => {
+    const r = await run(
+      `
+      local result = net.fetch_json("https://api.example.com/x")
+      local total = 0
+      for _, v in ipairs(result) do total = total + v end
+      return { t = type(result), len = #result, sum = total }
+      `,
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({ status: 200, body: '[1, 2, 3, 4]' })),
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { t: 'table', len: 4, sum: 10 } });
+  });
+
+  it('a fetch response exceeding the depth cap fails cleanly with a named, pcall-catchable error; the sandbox stays alive', async () => {
+    // Build JSON nested one level deeper than the (default) depth cap.
+    let body = '0';
+    for (let i = 0; i < 40; i++) body = `{"n": ${body}}`;
+    const r = await run(
+      `
+      local ok, err = pcall(net.fetch_json, "https://api.example.com/x")
+      return { ok = ok, err_has_depth = string.find(tostring(err), "depth") ~= nil }
+      `,
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({ status: 200, body })),
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false, err_has_depth: true } });
+  });
+
+  it('a fetch response exceeding the node cap fails cleanly with a named, pcall-catchable error; the sandbox stays alive', async () => {
+    const items = Array.from({ length: 50 }, (_, i) => i);
+    const r = await run(
+      `
+      local ok, err = pcall(net.fetch_json, "https://api.example.com/x")
+      return { ok = ok, err_has_nodes = string.find(tostring(err), "node") ~= nil }
+      `,
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({
+          status: 200,
+          body: JSON.stringify(items),
+        })),
+        netGrants: { get: ['api.example.com'], post: [] },
+        marshalLimits: { maxDepth: 32, maxNodes: 10 },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false, err_has_nodes: true } });
+  });
+
+  it('a depth-cap rejection is an ordinary capability denial (recorded, non-spoofable), not a later crash', async () => {
+    let body = '0';
+    for (let i = 0; i < 40; i++) body = `{"n": ${body}}`;
+    const engine = await createEmptyLuaEngine();
+    try {
+      const { rawGlobals, preludeLua, denials } = buildCapabilities({
+        tier: 'manual',
+        net: fakeNet(async () => ({ status: 200, body })),
+        netGrants: { get: ['api.example.com'], post: [] },
+      });
+      for (const [name, fn] of Object.entries(rawGlobals)) {
+        engine.global.set(name, fn);
+      }
+      if (preludeLua.trim().length > 0) {
+        await engine.doString(preludeLua);
+      }
+      const thread = engine.global.newThread();
+      const idx = engine.global.getTop();
+      try {
+        thread.loadString('net.fetch_json("https://api.example.com/x")');
+        await expect(thread.run(0)).rejects.toThrow();
+      } finally {
+        engine.global.remove(idx);
+      }
+      expect(denials.last()).toEqual({
+        reason: 'denied',
+        message: expect.stringContaining('depth'),
+      });
+    } finally {
+      engine.global.close();
+    }
+  });
+});
+
+describe('buildCapabilities — net.post/net.patch results are also plain Lua tables (issue #6 sibling)', () => {
+  it('net.post result is a genuine table (type() says table, fields readable)', async () => {
+    const r = await run(
+      `
+      local res = net.post("https://api.example.com/x", "payload")
+      return { t = type(res), status = res.status, body = res.body }
+      `,
+      {
+        tier: 'manual',
+        net: {
+          get: async () => ({ status: 200, body: '{}' }),
+          post: async () => ({ status: 201, body: 'created' }),
+        },
+        netGrants: { get: [], post: ['api.example.com'] },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: { t: 'table', status: 201, body: 'created' },
+    });
+  });
+
+  it('net.patch result is a genuine table (type() says table, fields readable)', async () => {
+    const r = await run(
+      `
+      local res = net.patch("https://api.example.com/x", "payload")
+      return { t = type(res), status = res.status, body = res.body }
+      `,
+      {
+        tier: 'manual',
+        net: {
+          get: async () => ({ status: 200, body: '{}' }),
+          patch: async () => ({ status: 200, body: 'updated' }),
+        },
+        netGrants: { get: [], post: ['api.example.com'] },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: { t: 'table', status: 200, body: 'updated' },
+    });
+  });
+});
+
 describe('buildCapabilities — tier gate on effectful net ops', () => {
   it("tier 'auto': net.post is a TIER-BLOCKED STUB (not absent) even though POST hosts are granted; calling it throws and never reaches the provider; net.fetch_json still works", async () => {
     const post = vi.fn(async () => ({ status: 200, body: '{}' }));
@@ -344,6 +534,142 @@ describe('buildCapabilities — cache.get', () => {
     );
     expect(r).toEqual({ ok: true, value: true });
     expect(fetchCalls).toBe(1); // second cache.get must hit the cache, not re-fetch
+  });
+});
+
+// Follow-up to issue #6: a cache HIT has the identical proxy problem a
+// fetch result has (a stored value is exactly the JSON-shaped data
+// `net.fetch_json` produces, and `cache.get(key, ttl, function() return
+// net.fetch_json(url) end)` is the documented idiom, docs/scripting.md).
+// A cache hit must deliver the same plain-Lua-table data a fresh fetch does.
+describe('buildCapabilities — cache.get delivers plain Lua data on a hit (issue #6 follow-up)', () => {
+  it('a nested array/object stored on a miss comes back as a genuine table on a later hit: type(), #, ipairs all work', async () => {
+    const store = new Map<string, CacheEntry>();
+    const r = await run(
+      `
+      local function compute()
+        return { tags = { "a", "b", "c" }, owner = { name = "ada", id = 7 } }
+      end
+      local miss = cache.get("k", 3600, compute)
+      local hit = cache.get("k", 3600, compute)
+      local sum = 0
+      for _, v in ipairs(hit.tags) do sum = sum + 1 end
+      return {
+        hit_type = type(hit),
+        hit_tags_type = type(hit.tags),
+        hit_tags_len = #hit.tags,
+        tag_count = sum,
+        owner_name = hit.owner.name,
+        owner_id = hit.owner.id,
+      }
+      `,
+      {
+        tier: 'manual',
+        cache: {
+          get: async (key) => store.get(key),
+          set: async (key, entry) => {
+            store.set(key, entry);
+          },
+        },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        hit_type: 'table',
+        hit_tags_type: 'table',
+        hit_tags_len: 3,
+        tag_count: 3,
+        owner_name: 'ada',
+        owner_id: 7,
+      },
+    });
+  });
+
+  it('a null-derived absent field on the miss path stays absent on a later hit (no error, nil, not a special null value)', async () => {
+    const store = new Map<string, CacheEntry>();
+    const r = await run(
+      `
+      local function compute()
+        return net.fetch_json("https://api.example.com/x")
+      end
+      local miss = cache.get("k", 3600, compute)
+      local hit = cache.get("k", 3600, compute)
+      return {
+        miss_wiki_is_nil = miss.wikipedia_url == nil,
+        hit_wiki_is_nil = hit.wikipedia_url == nil,
+        hit_name = hit.name,
+        echoed = hit,
+      }
+      `,
+      {
+        tier: 'manual',
+        net: fakeNet(async () => ({
+          status: 200,
+          body: '{"name": "collie", "wikipedia_url": null}',
+        })),
+        netGrants: { get: ['api.example.com'], post: [] },
+        cache: {
+          get: async (key) => store.get(key),
+          set: async (key, entry) => {
+            store.set(key, entry);
+          },
+        },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        miss_wiki_is_nil: true,
+        hit_wiki_is_nil: true,
+        hit_name: 'collie',
+        echoed: { name: 'collie' },
+      },
+    });
+  });
+
+  it('a scalar cached value keeps working unchanged through the new text-based hit path', async () => {
+    const store = new Map<string, CacheEntry>([
+      ['k', { value: 42, storedAtMs: Date.now() }],
+    ]);
+    const r = await run(
+      'return cache.get("k", 3600, function() return 0 end)',
+      {
+        tier: 'manual',
+        cache: {
+          get: async (key) => store.get(key),
+          set: async () => {
+            throw new Error('should not be called: entry is fresh');
+          },
+        },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: 42 });
+  });
+
+  it('a cyclic value from fn() is rejected as a marshal failure, not a JSON.stringify crash later on a hit', async () => {
+    const store = new Map<string, CacheEntry>();
+    const r = await run(
+      `
+      local function compute()
+        local t = {}
+        t.self = t
+        return t
+      end
+      local ok, err = pcall(cache.get, "k", 3600, compute)
+      return { ok = ok, has_cycle = string.find(tostring(err), "cycle") ~= nil }
+      `,
+      {
+        tier: 'manual',
+        cache: {
+          get: async (key) => store.get(key),
+          set: async (key, entry) => {
+            store.set(key, entry);
+          },
+        },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false, has_cycle: true } });
   });
 });
 

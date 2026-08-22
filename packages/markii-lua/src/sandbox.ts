@@ -271,6 +271,7 @@ export async function runScript(
       cache: options.cache,
       bundle: options.bundle,
       maxFetchBytes: options.maxFetchBytes,
+      marshalLimits,
     });
     for (const [name, fn] of Object.entries(rawGlobals)) {
       engine.global.set(name, fn);

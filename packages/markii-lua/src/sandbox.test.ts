@@ -283,6 +283,145 @@ describe('runScript — capabilities: net', () => {
   });
 });
 
+// GitHub issue #6, full pipeline (runScript, including the return-value
+// marshal walk — not just buildCapabilities in isolation; see
+// capabilities.test.ts for the narrower, in-Lua-only assertions).
+describe('runScript — net.fetch_json delivers plain Lua data, end to end (issue #6)', () => {
+  it('returning a nested array taken directly from the fetch result round-trips (used to fail with kind:"marshal", reason:"type")', async () => {
+    const r = await run(
+      'return net.fetch_json("https://api.example.com/x").items',
+      {
+        net: {
+          get: async () => ({
+            status: 200,
+            body: '{"items": [1, 2, {"nested": true}]}',
+          }),
+        },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: [1, 2, { nested: true }] });
+  });
+
+  it('a JSON null field reads as nil with no error; a table with that field absent marshals cleanly', async () => {
+    const r = await run(
+      `
+      local breed = net.fetch_json("https://api.example.com/x")
+      local url = breed.wikipedia_url
+      assert(url == nil, "expected nil, not an error or a special null value")
+      return breed
+      `,
+      {
+        net: {
+          get: async () => ({
+            status: 200,
+            body: '{"name": "collie", "wikipedia_url": null}',
+          }),
+        },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { name: 'collie' } });
+  });
+
+  it('#result, ipairs, and type(result) work on a top-level JSON array', async () => {
+    const r = await run(
+      `
+      local result = net.fetch_json("https://api.example.com/x")
+      local sum = 0
+      for _, v in ipairs(result) do sum = sum + v end
+      return { t = type(result), len = #result, sum = sum }
+      `,
+      {
+        net: { get: async () => ({ status: 200, body: '[10, 20, 30]' }) },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { t: 'table', len: 3, sum: 60 } });
+  });
+
+  it('a depth-cap-exceeding response fails cleanly and is catchable with pcall; the sandbox stays alive for the rest of the script', async () => {
+    let body = '0';
+    for (let i = 0; i < 40; i++) body = `{"n": ${body}}`;
+    const r = await run(
+      `
+      local ok, err = pcall(net.fetch_json, "https://api.example.com/x")
+      return { ok = ok, has_depth = string.find(tostring(err), "depth") ~= nil, alive = 1 + 1 }
+      `,
+      {
+        net: { get: async () => ({ status: 200, body }) },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: { ok: false, has_depth: true, alive: 2 },
+    });
+  });
+
+  it('a node-cap-exceeding response fails cleanly and is catchable with pcall', async () => {
+    const items = Array.from({ length: 50 }, (_, i) => i);
+    const r = await run(
+      `
+      local ok, err = pcall(net.fetch_json, "https://api.example.com/x")
+      return { ok = ok, has_nodes = string.find(tostring(err), "node") ~= nil }
+      `,
+      {
+        net: {
+          get: async () => ({ status: 200, body: JSON.stringify(items) }),
+        },
+        netGrants: { get: ['api.example.com'], post: [] },
+        marshalLimits: { maxDepth: 32, maxNodes: 10 },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false, has_nodes: true } });
+  });
+
+  it('an uncaught depth-cap failure is classified as kind:"capability", not a raw crash', async () => {
+    let body = '0';
+    for (let i = 0; i < 40; i++) body = `{"n": ${body}}`;
+    const r = await run('return net.fetch_json("https://api.example.com/x")', {
+      net: { get: async () => ({ status: 200, body }) },
+      netGrants: { get: ['api.example.com'], post: [] },
+    });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error.kind).toBe('capability');
+    expect(!r.ok && r.error.message).toContain('depth');
+  });
+
+  it('net.post/net.patch results are also genuine tables end to end (issue #6 sibling)', async () => {
+    const r = await run(
+      `
+      local posted = net.post("https://api.example.com/x", "payload")
+      local patched = net.patch("https://api.example.com/x", "payload")
+      return {
+        post_type = type(posted), post_status = posted.status, post_body = posted.body,
+        patch_type = type(patched), patch_status = patched.status, patch_body = patched.body,
+      }
+      `,
+      {
+        net: {
+          get: async () => ({ status: 200, body: '{}' }),
+          post: async () => ({ status: 201, body: 'created' }),
+          patch: async () => ({ status: 200, body: 'updated' }),
+        },
+        netGrants: { get: [], post: ['api.example.com'] },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        post_type: 'table',
+        post_status: 201,
+        post_body: 'created',
+        patch_type: 'table',
+        patch_status: 200,
+        patch_body: 'updated',
+      },
+    });
+  });
+});
+
 describe('runScript — capabilities: cache', () => {
   it('cache.get returns cached without calling fn when fresh, calls fn when stale', async () => {
     const store = new Map<string, { value: unknown; storedAtMs: number }>();
@@ -313,6 +452,125 @@ describe('runScript — capabilities: cache', () => {
       { cache },
     );
     expect(r2).toEqual({ ok: true, value: 'preloaded' });
+  });
+});
+
+// Follow-up to issue #6: cache.get(key, ttl, function() return
+// net.fetch_json(url) end) is THE documented idiom (docs/scripting.md), so a
+// cache HIT must deliver the same plain-Lua-table data a fresh MISS/fetch
+// does — full pipeline, two entirely separate `runScript` calls sharing one
+// backing store, exactly as two separate render passes of the same document
+// would.
+describe('runScript — cache.get hit-path parity with the miss path, end to end (issue #6 follow-up)', () => {
+  it('a script run twice against a shared store/clock: run 1 misses and fetches, run 2 hits the cache — both runs marshal to the SAME (deep-equal) result', async () => {
+    const store = new Map<string, { value: unknown; storedAtMs: number }>();
+    const fixedNow = 1_000_000;
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        store.set(key, entry);
+      },
+    };
+    let fetchCalls = 0;
+    const net = {
+      get: async () => {
+        fetchCalls++;
+        return {
+          status: 200,
+          body: '{"city": "berlin", "tags": ["cold", "rainy"], "wind": null, "readings": [1, 2, 3]}',
+        };
+      },
+    };
+    const script = `
+      return cache.get("weather", 3600, function()
+        return net.fetch_json("https://api.example.com/weather")
+      end)
+    `;
+    const options = {
+      net,
+      netGrants: { get: ['api.example.com'], post: [] },
+      cache,
+    };
+
+    vi.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    try {
+      const r1 = await run(script, options); // miss: fetches, then stores
+      const r2 = await run(script, options); // hit: served from the store
+      expect(r1.ok).toBe(true);
+      expect(r2).toEqual(r1); // structurally identical marshaled results
+      expect(fetchCalls).toBe(1);
+      expect(r1).toEqual({
+        ok: true,
+        value: {
+          city: 'berlin',
+          tags: ['cold', 'rainy'],
+          readings: [1, 2, 3],
+          // "wind": null is absent on BOTH the miss and the hit path.
+        },
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('the weather-script shape: cache.get wrapping fetch_json, a hit still returns nested arrays as real Lua tables (type/#/ipairs)', async () => {
+    const store = new Map<string, { value: unknown; storedAtMs: number }>();
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        store.set(key, entry);
+      },
+    };
+    const net = {
+      get: async () => ({
+        status: 200,
+        body: '{"forecast": [{"day": "mon", "highs": [10, 12]}, {"day": "tue", "highs": [8, 9]}]}',
+      }),
+    };
+    const script = `
+      local function fetch()
+        return net.fetch_json("https://api.example.com/weather")
+      end
+      cache.get("weather", 3600, fetch) -- miss: populates the cache
+      local data = cache.get("weather", 3600, fetch) -- hit
+      local total = 0
+      for _, day in ipairs(data.forecast) do
+        for _, h in ipairs(day.highs) do total = total + h end
+      end
+      return {
+        t = type(data.forecast),
+        days = #data.forecast,
+        first_day = data.forecast[1].day,
+        sum_of_highs = total,
+        full = data,
+      }
+    `;
+    const r = await run(script, {
+      net,
+      netGrants: { get: ['api.example.com'], post: [] },
+      cache,
+    });
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        t: 'table',
+        days: 2,
+        first_day: 'mon',
+        sum_of_highs: 39,
+        full: {
+          forecast: [
+            { day: 'mon', highs: [10, 12] },
+            { day: 'tue', highs: [8, 9] },
+          ],
+        },
+      },
+    });
   });
 });
 
@@ -581,5 +839,200 @@ describe('runScript — never raw-throws, even for an UNEXPECTED JS exception (a
   it('sanity: with the spy restored, the same script still succeeds normally', async () => {
     const r = await run('return 1 + 1');
     expect(r).toEqual({ ok: true, value: 2 });
+  });
+});
+
+// Adversarial verification pass on the issue #6 fix (net.fetch_json /
+// cache.get delivering plain Lua data): findings A1, A2, A4, B2, C2, D1.
+describe('runScript — adversarial verification pass fixes', () => {
+  it('A4: a hostile fetch response cannot spoof the internal array marker to force an array shape', async () => {
+    const r = await run('return net.fetch_json("https://api.example.com/x")', {
+      net: {
+        get: async () => ({
+          status: 200,
+          body: '{"__smd_is_array": true, "1": "a", "2": "b", "x": "kept"}',
+        }),
+      },
+      netGrants: { get: ['api.example.com'], post: [] },
+    });
+    expect(r).toEqual({ ok: true, value: { '1': 'a', '2': 'b', x: 'kept' } });
+    expect(r.ok && Array.isArray(r.value)).toBe(false);
+  });
+
+  it('A4: a directly-tampered (host-stored) cache entry cannot spoof the array marker on a hit either', async () => {
+    const store = new Map<string, { value: unknown; storedAtMs: number }>([
+      [
+        'k',
+        {
+          value: { __smd_is_array: true, '1': 'a', '2': 'b', x: 'kept' },
+          storedAtMs: Date.now(),
+        },
+      ],
+    ]);
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async () => {
+        throw new Error('should not be called: entry is fresh');
+      },
+    };
+    const r = await run(
+      'return cache.get("k", 3600, function() return 0 end)',
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { '1': 'a', '2': 'b', x: 'kept' } });
+    expect(r.ok && Array.isArray(r.value)).toBe(false);
+  });
+
+  it('B2: a cache-hit value exceeding the node cap is denied — the fetch path is not the only capped one', async () => {
+    const bigArray = Array.from({ length: 50 }, (_, i) => i);
+    const store = new Map<string, { value: unknown; storedAtMs: number }>([
+      ['k', { value: bigArray, storedAtMs: Date.now() }],
+    ]);
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async () => {
+        throw new Error('should not be called: entry is fresh');
+      },
+    };
+    const r = await run(
+      'return cache.get("k", 3600, function() return 0 end)',
+      { cache, marshalLimits: { maxDepth: 32, maxNodes: 10 } },
+    );
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error.kind).toBe('capability');
+    expect(!r.ok && r.error.message).toContain('node');
+  });
+
+  it('B2: a cyclic host-stored cache value fails as a clean, catchable denial — the sandbox stays alive (caught by the same depth budget, no dedicated cycle detector needed)', async () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const store = new Map<string, { value: unknown; storedAtMs: number }>([
+      ['k', { value: cyclic, storedAtMs: Date.now() }],
+    ]);
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async () => {
+        throw new Error('should not be called: entry is fresh');
+      },
+    };
+    const r = await run(
+      `
+      local ok = pcall(cache.get, "k", 3600, function() return 0 end)
+      return { ok = ok, alive = 1 + 1 }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false, alive: 2 } });
+  });
+
+  it('B2: a BigInt-bearing host-stored cache value (JSON.stringify throws) fails as a clean, catchable denial, not an unclassified crash', async () => {
+    const store = new Map<string, { value: unknown; storedAtMs: number }>([
+      ['k', { value: { big: 10n }, storedAtMs: Date.now() }],
+    ]);
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async () => {
+        throw new Error('should not be called: entry is fresh');
+      },
+    };
+    const r = await run(
+      'return cache.get("k", 3600, function() return 0 end)',
+      {
+        cache,
+      },
+    );
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error.kind).toBe('capability');
+  });
+
+  it('D1: rebinding __smd_marshal_root before a later cache.get call does not bypass the write-side cap', async () => {
+    const store = new Map<string, { value: unknown; storedAtMs: number }>();
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      __smd_marshal_root = function(v) return v end
+      local t = {}
+      for i = 1, 50 do t[i] = i end
+      local ok, err = pcall(cache.get, "k", 60, function() return t end)
+      return { ok = ok, has_nodes = string.find(tostring(err), "node") ~= nil }
+      `,
+      { cache, marshalLimits: { maxDepth: 32, maxNodes: 10 } },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false, has_nodes: true } });
+  });
+
+  it("A1: rebinding error/string/table/math/tonumber does not disable __smd_json_decode's own internal depth guard", async () => {
+    let body = '0';
+    for (let i = 0; i < 40; i++) body = `{"n": ${body}}`;
+    const r = await run(
+      `
+      error = function() end
+      string = nil
+      table = nil
+      math = nil
+      tonumber = nil
+      local ok = pcall(__smd_json_decode, ${JSON.stringify(body)})
+      return { ok = ok }
+      `,
+      {
+        net: { get: async () => ({ status: 200, body: '{}' }) },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: { ok: false } });
+  });
+
+  it('A2: rebinding __smd_json_decode before a later net.fetch_json call does not affect fetch_json', async () => {
+    const r = await run(
+      `
+      __smd_json_decode = function(t) return "TAMPERED" end
+      return net.fetch_json("https://api.example.com/x").ok
+      `,
+      {
+        net: { get: async () => ({ status: 200, body: '{"ok": true}' }) },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({ ok: true, value: true });
+  });
+
+  it('C2: a JSON null inside an ARRAY position decodes to Lua false (preserving sequential length); an object null value still stays absent', async () => {
+    const r = await run(
+      `
+      local data = net.fetch_json("https://api.example.com/x")
+      return {
+        len = #data.arr,
+        second_is_false = data.arr[2] == false,
+        arr = data.arr,
+        obj_field_absent = data.obj.wiki == nil,
+      }
+      `,
+      {
+        net: {
+          get: async () => ({
+            status: 200,
+            body: '{"arr": [1, null, 3], "obj": {"name": "x", "wiki": null}}',
+          }),
+        },
+        netGrants: { get: ['api.example.com'], post: [] },
+      },
+    );
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        len: 3,
+        second_is_false: true,
+        arr: [1, false, 3],
+        obj_field_absent: true,
+      },
+    });
   });
 });
