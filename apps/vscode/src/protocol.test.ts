@@ -5,6 +5,7 @@ import {
   isSafeBaseUri,
   isWebviewToHostMessage,
 } from './protocol';
+import type { ValuesMessage, WireStoredValue } from './protocol';
 
 const WEBVIEW_BASE = 'https://file+.vscode-resource.vscode-cdn.net/home/u/n/';
 
@@ -181,6 +182,190 @@ describe('isHostToWebviewMessage', () => {
     // Inherited, so not read at all — the message is still valid, it simply
     // carries no base URI.
     expect(isHostToWebviewMessage(inherited)).toBe(true);
+  });
+});
+
+const FRESH_VALUE: WireStoredValue = { value: 42, status: 'fresh' };
+
+function valuesMessage(overrides: Partial<ValuesMessage> = {}): ValuesMessage {
+  return {
+    type: 'values',
+    revision: 1,
+    values: { a: FRESH_VALUE },
+    failures: [],
+    ...overrides,
+  };
+}
+
+describe('isHostToWebviewMessage — values', () => {
+  it('accepts a well-formed values message with no failures', () => {
+    expect(isHostToWebviewMessage(valuesMessage())).toBe(true);
+  });
+
+  it('accepts an empty values record', () => {
+    expect(isHostToWebviewMessage(valuesMessage({ values: {} }))).toBe(true);
+  });
+
+  it('accepts a values message carrying failures', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          failures: [{ name: 'a', kind: 'capability-denied' }],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts every ValueStatus and every FailureKind', () => {
+    const statuses = ['fresh', 'stale', 'error', 'missing'] as const;
+    for (const status of statuses) {
+      expect(
+        isHostToWebviewMessage(
+          valuesMessage({ values: { a: { value: 1, status } } }),
+        ),
+      ).toBe(true);
+    }
+    const kinds = [
+      'script-error',
+      'capability-denied',
+      'tier-blocked',
+      'limit',
+    ] as const;
+    for (const kind of kinds) {
+      expect(
+        isHostToWebviewMessage(
+          valuesMessage({ failures: [{ name: 'a', kind }] }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it('accepts a StoredValue carrying error/failureKind/ranAt', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          values: {
+            a: {
+              value: undefined,
+              status: 'error',
+              error: 'boom',
+              failureKind: 'script-error',
+              ranAt: 1234,
+            },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a missing revision', () => {
+    const message: Record<string, unknown> = { ...valuesMessage() };
+    delete message.revision;
+    expect(isHostToWebviewMessage(message)).toBe(false);
+  });
+
+  it('rejects a missing values field', () => {
+    const message: Record<string, unknown> = { ...valuesMessage() };
+    delete message.values;
+    expect(isHostToWebviewMessage(message)).toBe(false);
+  });
+
+  it('rejects a missing failures field', () => {
+    const message: Record<string, unknown> = { ...valuesMessage() };
+    delete message.failures;
+    expect(isHostToWebviewMessage(message)).toBe(false);
+  });
+
+  it('rejects a non-array failures field', () => {
+    expect(
+      isHostToWebviewMessage(valuesMessage({ failures: {} as never })),
+    ).toBe(false);
+  });
+
+  it('rejects a bogus ValueStatus', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          values: { a: { value: 1, status: 'bogus' as never } },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a bogus FailureKind', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({ failures: [{ name: 'a', kind: 'bogus' as never }] }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a forged prototype-pollution FailureKind', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          failures: [{ name: 'a', kind: '__proto__' as never }],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a values entry that only inherits its fields from a prototype', () => {
+    const proto = { value: 1, status: 'fresh' };
+    const hostileEntry: unknown = Object.create(proto);
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({ values: { a: hostileEntry as WireStoredValue } }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a values record whose entry only inherits from the record prototype (never visited via Object.keys)', () => {
+    const proto = { a: FRESH_VALUE };
+    const hostileValues: unknown = Object.create(proto);
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          values: hostileValues as Record<string, WireStoredValue>,
+        }),
+      ),
+    ).toBe(true); // an empty own-keys record is still a valid (empty) values map
+  });
+
+  it('rejects an object that only inherits `type: values` from its prototype', () => {
+    const proto = { type: 'values' };
+    const hostile: unknown = Object.assign(Object.create(proto), {
+      revision: 1,
+      values: {},
+      failures: [],
+    });
+    expect(isHostToWebviewMessage(hostile)).toBe(false);
+  });
+
+  it('rejects a non-string error field', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          values: { a: { value: 1, status: 'error', error: 42 as never } },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a non-finite ranAt', () => {
+    expect(
+      isHostToWebviewMessage(
+        valuesMessage({
+          values: {
+            a: { value: 1, status: 'fresh', ranAt: Infinity as never },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a negative-revision values message the same as an update message', () => {
+    expect(isHostToWebviewMessage(valuesMessage({ revision: -1 }))).toBe(false);
   });
 });
 

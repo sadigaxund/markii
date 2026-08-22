@@ -38,6 +38,12 @@
         "title": "Open Preview",
         "category": "Markii",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "markii.runScripts",
+        "title": "Run Scripts",
+        "category": "Markii",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -46,12 +52,21 @@
           "command": "markii.openPreview",
           "when": "resourceFilename =~ /\\.mk\\.md$/",
           "group": "navigation@1"
+        },
+        {
+          "command": "markii.runScripts",
+          "when": "(resourceFilename =~ /\\.mk\\.md$/ && markii.previewActive) || activeWebviewPanelId == 'markii.preview'",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
           "command": "markii.openPreview",
           "when": "editorLangId == markdown"
+        },
+        {
+          "command": "markii.runScripts",
+          "when": "markii.previewActive"
         }
       ]
     },

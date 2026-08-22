@@ -2,9 +2,17 @@ import * as vscode from 'vscode';
 import { createDebouncer } from './debounce.js';
 import { isPreviewableDocument, previewTitleFor } from './mark-document.js';
 import { isWebviewToHostMessage } from './protocol.js';
-import type { HostToWebviewMessage } from './protocol.js';
+import type { HostToWebviewMessage, ValuesMessage } from './protocol.js';
 import { isCoveredByRoots, withTrailingSlash } from './resource-roots.js';
 import { buildWebviewHtml, createNonce } from './webview-html.js';
+import {
+  ALLOW_LABEL,
+  DONT_ALLOW_LABEL,
+  UNKNOWN_HOSTS_PROMPT_MESSAGE,
+  hostPromptMessage,
+} from './run/grant-flow.js';
+import { spawnRun } from './run/run-host.js';
+import { runOnce } from './run/run-flow.js';
 
 /**
  * Imports `vscode` — deliberately NOT unit-tested (vitest cannot resolve
@@ -15,6 +23,10 @@ import { buildWebviewHtml, createNonce } from './webview-html.js';
  */
 
 const VIEW_TYPE = 'markii.preview';
+/** External wall-clock budget for one `markii.runScripts` press — forwarded verbatim to `spawnRun`'s own watchdog (`run/run-host.ts`); the worker cannot influence or extend it. */
+const RUN_TIMEOUT_MS = 15_000;
+/** The `when`-clause context key `package.json`'s `markii.runScripts` menu entries gate on — kept in sync with true whenever a preview panel exists, false once it's disposed. */
+const PREVIEW_ACTIVE_CONTEXT_KEY = 'markii.previewActive';
 /**
  * The webview DOCUMENT's `<title>` — never visible in the editor (the tab
  * label is `panel.title`, set per document by `postUpdate`), but it is what
@@ -30,6 +42,15 @@ interface ActivePreview {
   /** `scheme://authority/path` keys of the `localResourceRoots` this panel was created with — see `retargetPreview`. Fixed for the panel's whole life, because `localResourceRoots` itself is. */
   readonly rootKeys: readonly string[];
   readonly debouncer: ReturnType<typeof createDebouncer<void>>;
+  /**
+   * Set for the duration of one `markii.runScripts` press. `runScripts`
+   * below IGNORES a press that arrives while this is already `true` —
+   * chosen over cancel-and-restart because a run's cache-snapshot mutation
+   * (`run/run-flow.ts`'s `runOnce`) is only safe to persist once a run has
+   * fully finished; cancelling mid-run would leave no well-defined snapshot
+   * to write back.
+   */
+  running: boolean;
 }
 
 /** The comparable key form of a URI for `resource-roots.ts` — scheme and authority included, so a `file:` root can never be mistaken for a same-path root on another scheme or remote authority. */
@@ -261,8 +282,14 @@ function createPreview(
     debouncer: createDebouncer<void>(DEBOUNCE_MS, () => {
       postUpdate(preview);
     }),
+    running: false,
   };
   active = preview;
+  void vscode.commands.executeCommand(
+    'setContext',
+    PREVIEW_ACTIVE_CONTEXT_KEY,
+    true,
+  );
 
   const disposables: vscode.Disposable[] = [
     // The ready/update handshake: the webview posts `{type: 'ready'}` once
@@ -312,7 +339,83 @@ function createPreview(
       disposable.dispose();
     }
     active = undefined;
+    void vscode.commands.executeCommand(
+      'setContext',
+      PREVIEW_ACTIVE_CONTEXT_KEY,
+      false,
+    );
   });
+}
+
+/** Prompts once for a specific host, with the normative modal wording (`run/grant-flow.ts`'s `hostPromptMessage`) and the Allow / Don't allow button pair. */
+async function promptHostAdapter(host: string): Promise<boolean> {
+  const choice = await vscode.window.showInformationMessage(
+    hostPromptMessage(host),
+    { modal: true },
+    ALLOW_LABEL,
+    DONT_ALLOW_LABEL,
+  );
+  return choice === ALLOW_LABEL;
+}
+
+/** Prompts once for the "this note builds a network address dynamically" consent gate (`run/grant-flow.ts`'s `UNKNOWN_HOSTS_PROMPT_MESSAGE`). */
+async function promptUnknownHostsAdapter(): Promise<boolean> {
+  const choice = await vscode.window.showInformationMessage(
+    UNKNOWN_HOSTS_PROMPT_MESSAGE,
+    { modal: true },
+    ALLOW_LABEL,
+    DONT_ALLOW_LABEL,
+  );
+  return choice === ALLOW_LABEL;
+}
+
+/**
+ * The `markii.runScripts` command handler: runs the currently previewed
+ * document's scripts once (grant flow, then `spawnRun`) and posts the
+ * outcome to the panel as a `values` message.
+ *
+ * A press that arrives while no preview is open, or while a previous press
+ * is still running, is a no-op — see `ActivePreview.running`'s doc comment
+ * for why this is "ignore", not "cancel and restart".
+ *
+ * The result is tagged with the revision captured BEFORE `runOnce`'s own
+ * awaits (the grant prompts and the run itself can each take a while, and
+ * the document may keep changing underneath) — the webview
+ * (`webview/preview.tsx`) drops a `values` message whose revision no
+ * longer matches what it is currently displaying.
+ */
+export async function runScripts(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const preview = active;
+  if (!preview || preview.running) return;
+
+  preview.running = true;
+  const revision = preview.revision;
+  const documentKey = preview.document.uri.toString();
+  const text = preview.document.getText();
+
+  try {
+    const result = await runOnce({
+      documentKey,
+      text,
+      memento: context.workspaceState,
+      promptHost: promptHostAdapter,
+      promptUnknownHosts: promptUnknownHostsAdapter,
+      spawnRun,
+      timeoutMs: RUN_TIMEOUT_MS,
+    });
+
+    const message: ValuesMessage = {
+      type: 'values',
+      revision,
+      values: result.values,
+      failures: result.failures,
+    };
+    void preview.panel.webview.postMessage(message);
+  } finally {
+    preview.running = false;
+  }
 }
 
 /**

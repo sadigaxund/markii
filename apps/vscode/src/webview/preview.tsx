@@ -2,6 +2,8 @@ import { Component, useEffect, useMemo, useRef, useState } from 'react';
 import type { ErrorInfo, ReactElement, ReactNode } from 'react';
 import { renderMark } from '@markii/react';
 import { defaultRegistry } from '@markii/react/components';
+import { createValueStore } from '@markii/runtime';
+import type { StoredValue } from '@markii/runtime';
 import { isHostToWebviewMessage, isNewerRevision } from '../protocol.js';
 import type { WebviewToHostMessage } from '../protocol.js';
 import { applyDocumentBase } from './document-images.js';
@@ -74,14 +76,38 @@ export class PreviewErrorBoundary extends Component<
 
 const READY_MESSAGE: WebviewToHostMessage = { type: 'ready' };
 
-function initialState(): PersistedState {
+/**
+ * One `values` message's contents, tagged with the text revision it was
+ * computed against. Kept separate from the run's `failures` array — every
+ * per-script failure a component needs to branch on is already embedded in
+ * its own `StoredValue.failureKind` (`@markii/runtime`'s store), so nothing
+ * here needs to thread `failures` through to rendering; it exists on the
+ * wire only for a future host-side use (e.g. a status-bar summary).
+ */
+interface RunValues {
+  readonly revision: number;
+  readonly values: Record<string, StoredValue>;
+}
+
+/** This component's full local state: the persisted `{text, revision,
+ * baseUri}` (`vscode-api.ts`'s `PersistedState`, unchanged) plus the
+ * latest run output, NOT persisted — see `runValues`'s own doc comment on
+ * why hiding/recreating the webview simply drops it rather than round-
+ * tripping run results through `setState`.
+ */
+interface LocalState extends PersistedState {
+  readonly runValues?: RunValues;
+}
+
+function initialState(): LocalState {
   return getPersistedState() ?? { text: '', revision: 0 };
 }
 
 /**
- * The webview's root component. Holds `{text, revision}` in state,
- * seeded on mount from whatever was last persisted via `setState`
- * (`vscode-api.ts`) so a hidden/recreated webview (this extension runs with
+ * The webview's root component. Holds `{text, revision, baseUri}` (plus,
+ * separately, the last run's output) in state, seeded on mount from
+ * whatever was last persisted via `setState` (`vscode-api.ts`) so a
+ * hidden/recreated webview (this extension runs with
  * `retainContextWhenHidden: false` — see `preview-panel.ts`) rehydrates
  * instantly instead of flashing empty before the host's re-post arrives.
  *
@@ -90,13 +116,15 @@ function initialState(): PersistedState {
  * very first `postMessage` can never be dropped for arriving before this
  * component's message listener has attached.
  *
- * Rendering is pure `renderMark` with no value store and no scripting (this
- * is a later version, per the task's scope note): script blocks legitimately
- * show the renderer's collapsed marker and data-bound components show their
- * standard empty states, exactly as they do with no store supplied.
+ * Rendering feeds `renderMark` a value store built from the most recent
+ * `values` message THAT STILL MATCHES THE CURRENT TEXT REVISION — see
+ * `store`'s own comment. With no matching run yet, `renderMark` gets no
+ * store at all: script blocks show the renderer's collapsed marker and
+ * data-bound components show their standard empty states, exactly as
+ * before `markii.runScripts` existed.
  */
 export function Preview(): ReactElement {
-  const [state, setState] = useState<PersistedState>(initialState);
+  const [state, setState] = useState<LocalState>(initialState);
   const documentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -108,15 +136,30 @@ export function Preview(): ReactElement {
     function onMessage(event: MessageEvent<unknown>): void {
       const data = event.data;
       if (!isHostToWebviewMessage(data)) return;
-      setState((previous) =>
-        isNewerRevision(previous.revision, data.revision)
-          ? {
-              text: data.text,
-              revision: data.revision,
-              baseUri: data.baseUri,
-            }
-          : previous,
-      );
+      setState((previous) => {
+        if (data.type === 'update') {
+          if (!isNewerRevision(previous.revision, data.revision)) {
+            return previous;
+          }
+          return {
+            text: data.text,
+            revision: data.revision,
+            baseUri: data.baseUri,
+            // A run's output is tied to the revision it ran against; a
+            // fresh `update` can never match that revision again (revision
+            // numbers only increase), so there's nothing to carry forward.
+            runValues: undefined,
+          };
+        }
+        // A `values` result for anything other than the CURRENT text
+        // revision is stale — e.g. the document kept changing while the
+        // run was in flight — and is dropped rather than applied.
+        if (data.revision !== previous.revision) return previous;
+        return {
+          ...previous,
+          runValues: { revision: data.revision, values: data.values },
+        };
+      });
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
@@ -127,14 +170,32 @@ export function Preview(): ReactElement {
   // transition (StrictMode does so deliberately), and an updater that writes
   // to the outside world is not a pure function of its previous state. Here
   // it runs once per applied state, which is exactly the rehydration
-  // contract `preview-panel.ts` documents.
+  // contract `preview-panel.ts` documents. Only the `PersistedState` fields
+  // are written back out — `runValues` is deliberately not part of the
+  // persisted shape (see `LocalState`'s doc comment).
   useEffect(() => {
-    setPersistedState(state);
-  }, [state]);
+    setPersistedState({
+      text: state.text,
+      revision: state.revision,
+      baseUri: state.baseUri,
+    });
+  }, [state.text, state.revision, state.baseUri]);
+
+  // Only a run whose revision still matches the CURRENTLY DISPLAYED text
+  // counts — this is the other half of the stale-revision drop above (that
+  // one guards what gets ACCEPTED into state; this guards what gets USED,
+  // in case `runValues` from a since-superseded revision were ever still
+  // sitting in state).
+  const store = useMemo(() => {
+    if (!state.runValues || state.runValues.revision !== state.revision) {
+      return undefined;
+    }
+    return createValueStore(state.runValues.values);
+  }, [state.runValues, state.revision]);
 
   const rendered = useMemo(
-    () => renderMark(state.text, defaultRegistry),
-    [state.text],
+    () => renderMark(state.text, defaultRegistry, store),
+    [state.text, store],
   );
 
   // Relative image sources are resolved against the document's folder AFTER
