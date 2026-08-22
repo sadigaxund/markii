@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactElement } from 'react';
 import { renderMark } from '@markii/react';
 import { defaultRegistry } from '@markii/react/components';
@@ -11,6 +18,7 @@ import {
   createMemoryCacheProvider,
   DEMO_NET_GRANTS,
 } from './script-host';
+import { highlightPreviewCodeBlocks } from './code-highlight';
 // Vite `?url` asset import: ships wasmoon's `glue.wasm` as a hashed file in
 // this app's own build output and resolves to that local URL at runtime,
 // instead of `@markii/lua`'s default (unconfigured) browser behavior of
@@ -147,10 +155,26 @@ export function App(): ReactElement {
   // `renderVersion` has no meaningful value of its own — it is included
   // purely so this memo recomputes after a run mutates `storeRef.current`
   // in place (see the doc comment above `renderVersion`'s declaration).
-  const preview = useMemo(
-    () => renderMark(debounced, defaultRegistry, storeRef.current),
-    [debounced, renderVersion],
-  );
+  // Bumped once per `preview` recomputation, purely to give `.doc` below a
+  // fresh `key` each time (see the effect after `preview`'s declaration).
+  const previewKeyRef = useRef(0);
+  const preview = useMemo(() => {
+    previewKeyRef.current += 1;
+    return renderMark(debounced, defaultRegistry, storeRef.current);
+  }, [debounced, renderVersion]);
+
+  // Playground-only syntax highlighting for rendered code blocks (issue #5).
+  // `@markii/react` never re-highlights a fence itself (see `ScriptMarker`'s
+  // doc comment), so this walks the committed preview DOM and decorates it
+  // in place. It must run against a genuinely fresh subtree every time —
+  // mutating `innerHTML` under a node React still plans to reconcile against
+  // would leave stale spans behind after the next edit — which is exactly
+  // what the `key` on `.doc` below (bumped whenever `preview` itself changes)
+  // guarantees: React fully remounts the subtree instead of diffing it.
+  const docRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (docRef.current) highlightPreviewCodeBlocks(docRef.current);
+  }, [preview]);
 
   return (
     <div className="playground">
@@ -202,7 +226,9 @@ export function App(): ReactElement {
           </div>
           <div className="playground__preview">
             <PreviewErrorBoundary resetKey={debounced}>
-              <div className="doc">{preview}</div>
+              <div className="doc" key={previewKeyRef.current} ref={docRef}>
+                {preview}
+              </div>
             </PreviewErrorBoundary>
           </div>
           <p className="playground__scripting-status">{statusLine(runState)}</p>

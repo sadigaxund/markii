@@ -284,6 +284,88 @@ body {
   font-size: 0.85rem;
 }
 
+/*
+ * Rendered code-block syntax highlighting (issue #5), playground-only —
+ * `@markii/react`'s `doc.css` is untouched. Applied by `code-highlight.ts`
+ * to `<code>` text it recognizes a Lezer grammar for; anything else stays
+ * plain. Colors are the same palette `codemirror-setup.ts` uses for the
+ * source pane (`smdHighlightStyle`), so a token reads the same color on
+ * both sides of the split.
+ */
+.mk-hl .tok-comment {
+  color: #888888;
+  font-style: italic;
+}
+
+.mk-hl .tok-string {
+  color: #0f766e;
+}
+
+.mk-hl .tok-number {
+  color: #b45309;
+}
+
+.mk-hl .tok-keyword {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.mk-hl .tok-function {
+  color: #3b82f6;
+}
+
+.mk-hl .tok-property,
+.mk-hl .tok-attribute {
+  color: #a03e8f;
+}
+
+.mk-hl .tok-definition {
+  color: #1d4ed8;
+}
+
+.mk-hl .tok-variable {
+  color: #1a1a1a;
+}
+
+.mk-hl .tok-type {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.mk-hl .tok-tag {
+  color: #7c3aed;
+}
+
+.mk-hl .tok-strong {
+  font-weight: 700;
+}
+
+.mk-hl .tok-emphasis {
+  font-style: italic;
+}
+
+.mk-hl .tok-link,
+.mk-hl .tok-url {
+  color: #3b82f6;
+}
+
+.mk-hl .tok-punctuation,
+.mk-hl .tok-operator {
+  color: #666666;
+}
+
+.mk-hl .tok-regexp {
+  color: #b45309;
+}
+
+.mk-hl .tok-meta {
+  color: #94a3b8;
+}
+
+.mk-hl .tok-invalid {
+  color: #dc2626;
+}
+
 .playground__footnote {
   padding: 0.5rem 1.5rem;
   border-top: 1px solid #e2e2e5;
