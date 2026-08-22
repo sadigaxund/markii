@@ -22,7 +22,7 @@ import type {
   Registry,
   RegistryEntry,
 } from './registry.js';
-import { resolveDirectiveAlias } from './registry.js';
+import { readRegistryComponent, resolveDirectiveAlias } from './registry.js';
 import { resolveLayoutAttributes } from './layout.js';
 import { ScriptMarker } from './components/script-marker.js';
 import { UnknownDirective } from './components/unknown-directive.js';
@@ -280,7 +280,7 @@ function renderDirectiveContent(
   // `valueOf`, `hasOwnProperty`, etc. resolving through the prototype
   // chain to an inherited `Object.prototype` member instead of falling
   // through to the unknown-directive fallback (Architecture rule 3: unknown
-  // directives never throw). The `entry?.component == null` check is a
+  // directives never throw). The `Component == null` check below is a
   // second belt-and-suspenders guard for the same class of bug — it must
   // be a nullish check rather than `typeof ... !== 'function'`, since
   // `React.memo`/`forwardRef`/`lazy` all produce a component whose
@@ -294,7 +294,19 @@ function renderDirectiveContent(
   // emit here lands inside the paragraph the directive was written in.
   const inline = kind === TEXT_DIRECTIVE_KIND;
 
-  if (entry?.component == null) {
+  // `readRegistryComponent` (from `./registry.js`) reads `entry.component`
+  // behind a try/catch, so a hand-built registry entry defining `component`
+  // as a throwing getter (or a `Proxy` trapping the read) degrades to "no
+  // component here" exactly like a genuinely missing one, instead of an
+  // exception escaping React's render phase (docs/spec.md requirement 4) —
+  // the same hostile-configuration guard `isFormMismatch` already gives
+  // `entry.inline`. The `!entry` half of the guard below only narrows
+  // `entry`'s type for the `isFormMismatch` call further down (a `Component`
+  // can only be non-null when `entry` itself is defined); it never changes
+  // behavior, since an undefined `entry` already yields a `null` `Component`.
+  const Component = readRegistryComponent(entry);
+
+  if (!entry || Component == null) {
     return (
       <UnknownDirective name={name || '(unnamed)'} inline={inline}>
         {children}
@@ -319,7 +331,6 @@ function renderDirectiveContent(
     );
   }
 
-  const Component = entry.component;
   const binding = resolveDataAttribute(attributes, store, vault);
   // `data`/`dataStatus` are only spread in when the directive actually had
   // a `data=` attribute (`'data' in binding`) — NOT whenever

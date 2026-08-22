@@ -151,7 +151,9 @@ enforced on the host side before decoding and reported as an ordinary
 capability denial. The same change bounded the cache write path: a value
 being stored now passes through the same capped, cycle-safe walk a
 script's own return value gets, so an oversized or cyclic value fails
-cleanly instead of reaching storage. The security posture is unchanged:
+cleanly instead of reaching storage. A stored entry that fails those
+checks on a later read, which can only mean host-side corruption, is
+treated as a cache miss and recomputed rather than blocking the script. The security posture is unchanged:
 nothing non-serializable crosses into the sandbox through these paths, and
 the capability tier gating is untouched.
 

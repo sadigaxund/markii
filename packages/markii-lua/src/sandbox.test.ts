@@ -883,66 +883,130 @@ describe('runScript — adversarial verification pass fixes', () => {
     expect(r.ok && Array.isArray(r.value)).toBe(false);
   });
 
-  it('B2: a cache-hit value exceeding the node cap is denied — the fetch path is not the only capped one', async () => {
+  it('B2: a cache-hit value exceeding the node cap self-heals as a MISS — fn runs once, the fresh value comes back, and the stored entry is overwritten (orchestrator decision, #6 verification notes)', async () => {
     const bigArray = Array.from({ length: 50 }, (_, i) => i);
     const store = new Map<string, { value: unknown; storedAtMs: number }>([
       ['k', { value: bigArray, storedAtMs: Date.now() }],
     ]);
+    let setCalls = 0;
     const cache = {
       get: async (key: string) => store.get(key),
-      set: async () => {
-        throw new Error('should not be called: entry is fresh');
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
       },
     };
     const r = await run(
-      'return cache.get("k", 3600, function() return 0 end)',
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return 42 end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
       { cache, marshalLimits: { maxDepth: 32, maxNodes: 10 } },
     );
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.error.kind).toBe('capability');
-    expect(!r.ok && r.error.message).toContain('node');
+    expect(r).toEqual({ ok: true, value: { result: 42, calls: 1 } });
+    expect(setCalls).toBe(1);
+    expect(store.get('k')?.value).toBe(42);
   });
 
-  it('B2: a cyclic host-stored cache value fails as a clean, catchable denial — the sandbox stays alive (caught by the same depth budget, no dedicated cycle detector needed)', async () => {
+  it('B2: a cyclic host-stored cache value self-heals as a MISS — the sandbox stays alive, fn runs, and the good value replaces the cyclic one', async () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     const store = new Map<string, { value: unknown; storedAtMs: number }>([
       ['k', { value: cyclic, storedAtMs: Date.now() }],
     ]);
+    let setCalls = 0;
     const cache = {
       get: async (key: string) => store.get(key),
-      set: async () => {
-        throw new Error('should not be called: entry is fresh');
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
       },
     };
     const r = await run(
       `
-      local ok = pcall(cache.get, "k", 3600, function() return 0 end)
-      return { ok = ok, alive = 1 + 1 }
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls, alive = 1 + 1 }
       `,
       { cache },
     );
-    expect(r).toEqual({ ok: true, value: { ok: false, alive: 2 } });
+    expect(r).toEqual({
+      ok: true,
+      value: { result: 'fresh', calls: 1, alive: 2 },
+    });
+    expect(setCalls).toBe(1);
+    expect(store.get('k')?.value).toBe('fresh');
   });
 
-  it('B2: a BigInt-bearing host-stored cache value (JSON.stringify throws) fails as a clean, catchable denial, not an unclassified crash', async () => {
+  it('B2: a BigInt-bearing host-stored cache value (JSON.stringify throws) self-heals as a MISS, not an unclassified crash', async () => {
     const store = new Map<string, { value: unknown; storedAtMs: number }>([
       ['k', { value: { big: 10n }, storedAtMs: Date.now() }],
     ]);
+    let setCalls = 0;
     const cache = {
       get: async (key: string) => store.get(key),
-      set: async () => {
-        throw new Error('should not be called: entry is fresh');
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
       },
     };
     const r = await run(
-      'return cache.get("k", 3600, function() return 0 end)',
-      {
-        cache,
-      },
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
     );
-    expect(r.ok).toBe(false);
-    expect(!r.ok && r.error.kind).toBe('capability');
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    expect(store.get('k')?.value).toBe('fresh');
+  });
+
+  it('B2 follow-up: an EXPIRED oversized entry also just refreshes, the same as a fresh oversized one', async () => {
+    const bigArray = Array.from({ length: 50 }, (_, i) => i);
+    const store = new Map<string, { value: unknown; storedAtMs: number }>([
+      // Stored far outside any TTL — if the oversized entry were somehow
+      // decoded before the freshness check, it would already look stale;
+      // self-healing must short-circuit to a miss before that ever matters.
+      ['k', { value: bigArray, storedAtMs: Date.now() - 1000 * 1000 }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key),
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return 7 end
+      local result = cache.get("k", 1, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache, marshalLimits: { maxDepth: 32, maxNodes: 10 } },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 7, calls: 1 } });
+    expect(setCalls).toBe(1);
+    expect(store.get('k')?.value).toBe(7);
   });
 
   it('D1: rebinding __smd_marshal_root before a later cache.get call does not bypass the write-side cap', async () => {

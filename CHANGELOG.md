@@ -6,7 +6,21 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hostile registry configuration (`@markii/react`)**: a registry entry
+  whose `component` property is a throwing getter now degrades to the
+  unknown-directive fallback instead of escaping `renderMark`, in every
+  directive form and through alias resolution.
+
 ### Changed
+
+- **Cache self-heals (`@markii/lua`)**: `cache.get` treats a host-stored
+  entry that exceeds the marshal caps or cannot be JSON-encoded (cyclic or
+  BigInt-bearing) as a cache miss: it recomputes, overwrites the bad
+  entry, and returns the fresh value, instead of denying the call until
+  the host evicts the entry. A denial is still raised if the freshly
+  computed value itself fails the write-side caps.
 
 - **The format is named Markii** (rhymes with marquee), one name
   everywhere. This unifies the earlier split where titles said "Mark II"

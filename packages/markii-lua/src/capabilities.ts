@@ -517,27 +517,27 @@ net.patch = function(url, body) return __smd_net_patch_blocked(url, body):await(
       // below — so without this check, a 300k-element cached array reached
       // the script completely uncapped even though the FETCH path was
       // already capped.
+      //
+      // An entry that fails the budget check, or that cannot be
+      // `JSON.stringify`'d at all (cyclic, or BigInt-bearing — something
+      // other than this sandbox's own WRITE side must have written it,
+      // since that side already rejects both), is SELF-HEALED rather than
+      // denied (orchestrator decision, #6 verification notes): it is
+      // treated as a cache MISS, exactly as if `key` had never been
+      // stored. `cache.get`'s Lua body (below) then calls `fn()` and
+      // writes the fresh, already-capped result back through
+      // `__smd_cache_set_raw`, which quietly repairs the stored entry for
+      // next time. No denial is recorded for this path — a capability
+      // denial is reserved for the fresh recompute itself failing the
+      // WRITE side's own caps, which is unchanged.
       const budgetCheck = checkJsonWithinLimits(entry.value, marshalLimits);
-      if (!budgetCheck.ok) {
-        const message = `cached value for "${key}" ${budgetCheck.message}`;
-        recordDenial('denied', message);
-        throw capabilityError(message);
-      }
+      if (!budgetCheck.ok) return undefined;
       let text: string;
       try {
-        // A cyclic or BigInt-bearing stored value throws here. This
-        // module's own WRITE side (`__smd_cache_set_raw` below) already
-        // rejects both before ever storing anything, but a `CacheProvider`
-        // is host-controlled storage that something other than this
-        // sandbox could have written — turn that into the same clean,
-        // catchable denial instead of an unclassified throw out of the
-        // capability layer.
         const encoded = JSON.stringify(entry.value);
         text = encoded === undefined ? 'null' : encoded;
-      } catch (err) {
-        const message = `cached value for "${key}" could not be encoded: ${describeThrown(err)}`;
-        recordDenial('denied', message);
-        throw capabilityError(message);
+      } catch {
+        return undefined;
       }
       return LuaMultiReturn.of<string | number>(text, entry.storedAtMs);
     }) as (...args: never[]) => Promise<unknown>;

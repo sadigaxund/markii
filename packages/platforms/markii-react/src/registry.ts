@@ -195,6 +195,33 @@ export function mergeRegistries(...registries: Registry[]): Registry {
 }
 
 /**
+ * Reads `entry.component`, or `undefined` if `entry` is nullish OR the read
+ * itself throws.
+ *
+ * `component` is a plain data property on every well-behaved
+ * `RegistryEntry`, but nothing stops a hand-built registry from defining it
+ * as a throwing getter (or handing over a `Proxy` that traps the read) —
+ * exactly the same "hostile registry configuration" class `isFormMismatch`
+ * in `render.tsx` already guards for `entry.inline`. `component` is looked
+ * up far more often than `inline` (every directive, both here and in
+ * `render.tsx`'s `renderDirectiveContent`), so it gets its own shared,
+ * exported accessor rather than a second private wrapper: a throwing read
+ * degrades to "no component here", identical to a genuinely absent one —
+ * never an exception escaping React's render phase (docs/spec.md
+ * requirement 4).
+ */
+export function readRegistryComponent(
+  entry: RegistryEntry | undefined,
+): ComponentType<MarkComponentProps> | undefined {
+  if (!entry) return undefined;
+  try {
+    return entry.component ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Whether `registry` has a real, usable component under `name`.
  *
  * `Object.hasOwn` rather than `name in registry` / bare indexing, for the
@@ -203,10 +230,15 @@ export function mergeRegistries(...registries: Registry[]): Registry {
  * half matches `render.tsx`'s own "is this entry usable" test, so a broken
  * entry (`{ component: undefined }`, e.g. from a half-loaded pack) counts as
  * absent HERE too — which is what lets an alias still stand in for a name
- * whose entry is broken, instead of both paths failing at once.
+ * whose entry is broken, instead of both paths failing at once. The read
+ * itself goes through `readRegistryComponent`, so a throwing `component`
+ * getter counts as broken too, rather than escaping alias resolution.
  */
 function hasComponent(registry: Registry, name: string): boolean {
-  return Object.hasOwn(registry, name) && registry[name]?.component != null;
+  return (
+    Object.hasOwn(registry, name) &&
+    readRegistryComponent(registry[name]) != null
+  );
 }
 
 /**
