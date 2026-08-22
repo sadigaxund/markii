@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildWebviewHtml, createNonce } from './webview-html';
 
 const BASE_OPTIONS = {
@@ -111,5 +111,21 @@ describe('createNonce', () => {
   it('stays in bounds for a random source returning the edge value 1', () => {
     const nonce = createNonce(() => 1);
     expect(nonce).toMatch(/^[A-Za-z0-9]{32}$/);
+  });
+
+  it('N-9: the default source is not Math.random (uses a CSPRNG)', () => {
+    // We can't observe the RNG algorithm directly, but we can pin the
+    // regression this fix guards against: capture `Math.random` calls
+    // during a default-arguments `createNonce()` call and assert it was
+    // never invoked -- the whole point of N-9 is that the default no
+    // longer depends on it.
+    const spy = vi.spyOn(Math, 'random');
+    try {
+      const nonce = createNonce();
+      expect(nonce).toMatch(/^[A-Za-z0-9]{32}$/);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

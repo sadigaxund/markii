@@ -31,11 +31,19 @@
  * removes a document's record outright, for the `markii.resetScriptGrants`
  * command.
  *
- * ## The two prompt shapes
+ * ## The prompt shapes
  *
  * - One prompt per statically-known host (`promptHost`), worded exactly
  *   "This note's scripts can send data to <host>. Allow?" — see
- *   `hostPromptMessage`.
+ *   `hostPromptMessage`. Used only while the distinct safe host count is at
+ *   or under `MAX_HOST_PROMPTS`; above that, `promptManyHosts` (below) takes
+ *   over instead so a note can never turn one Run press into a wall of
+ *   modals (the PROMPT-STORM fix — see `MAX_HOST_PROMPTS`'s doc comment).
+ * - `promptManyHosts`, exactly once, in place of the whole per-host loop
+ *   when there are more than `MAX_HOST_PROMPTS` distinct safe hosts: one
+ *   all-or-nothing gate ("This note requests network access to many hosts
+ *   (N). Allow all or deny all?", `manyHostsPromptMessage`) rather than N
+ *   separate dialogs.
  * - Exactly one extra prompt (`promptUnknownHosts`,
  *   `UNKNOWN_HOSTS_PROMPT_MESSAGE`) when the closure could reach hosts that
  *   cannot be listed in advance (`RunRequirements.hasUnknownHosts`, or a
@@ -92,6 +100,9 @@ export type PromptHost = (host: string) => Promise<boolean>;
 /** Prompts once for the "this note builds a network address dynamically" consent gate. */
 export type PromptUnknownHosts = () => Promise<boolean>;
 
+/** Prompts once for the consolidated "many hosts" gate (PROMPT-STORM fix) — resolves `true` for Allow all, `false` for Deny all. */
+export type PromptManyHosts = (hostCount: number) => Promise<boolean>;
+
 export interface GrantFlowOptions {
   /** Stable identity for the note this run belongs to — `vscode.Uri.toString()` of the document, in the real adapter. */
   documentKey: string;
@@ -99,6 +110,8 @@ export interface GrantFlowOptions {
   memento: GrantMemento;
   promptHost: PromptHost;
   promptUnknownHosts: PromptUnknownHosts;
+  /** Consolidated gate used instead of the per-host loop once the distinct static host count exceeds `MAX_HOST_PROMPTS` — see that constant's doc comment. */
+  promptManyHosts: PromptManyHosts;
 }
 
 export interface GrantFlowResult {
@@ -118,6 +131,38 @@ export const UNKNOWN_HOSTS_PROMPT_MESSAGE =
 /** Button labels every prompt in this flow uses — both a plain "Allow" and a "Don't allow" refusal are always offered, never a bare dismiss-only message. */
 export const ALLOW_LABEL = 'Allow';
 export const DONT_ALLOW_LABEL = "Don't allow";
+
+/**
+ * PROMPT-STORM fix (report section 8, item 6, PENTEST-REPORT-2026-08-23.md):
+ * `runGrantFlow`'s per-host loop below is sequential and modal, one dialog
+ * per statically-extracted host. A hostile note with hundreds of literal
+ * `net.fetch_json("https://hostN/")` calls would otherwise re-open hundreds
+ * of modals on EVERY `markii.runScripts` press — and because a FULL decline
+ * is deliberately never persisted (C-3, so one mis-click can't permanently
+ * lock out network access), nothing about answering them once makes them
+ * stop recurring on the next Run press either. That makes the per-host loop
+ * itself a denial-of-service surface against the user's own attention, not
+ * just an annoyance.
+ *
+ * The guard: cap how many per-host prompts one run will ever show. When the
+ * distinct SAFE static host count is at or under this cap, the ordinary
+ * per-host flow runs exactly as before (this is overwhelmingly the common
+ * case — most notes touch a small, fixed set of APIs). Above the cap, the
+ * per-host loop is skipped entirely in favor of ONE consolidated prompt
+ * (`promptManyHosts`) that grants either every one of those hosts or none of
+ * them — still a single, honest, all-or-nothing consent decision, just sized
+ * to the actual scale of what's being asked, rather than a wall of modals a
+ * user would rationally start rubber-stamping. 10 is comfortably above what
+ * a legitimate dashboard-style note (docs/scripting.md's callout on
+ * dashboards being a first-class use case) is expected to reach while still
+ * catching a hostile host list before it becomes hundreds of dialogs.
+ */
+export const MAX_HOST_PROMPTS = 10;
+
+/** Exact wording of the consolidated "many hosts" gate — normative, mirroring `hostPromptMessage`/`UNKNOWN_HOSTS_PROMPT_MESSAGE`'s pattern of an exported, test-anchored string. */
+export function manyHostsPromptMessage(hostCount: number): string {
+  return `This note requests network access to many hosts (${hostCount}). Allow all or deny all?`;
+}
 
 const GRANTS_STORAGE_KEY = 'markii.netGrants';
 
@@ -153,14 +198,42 @@ function readAllGrants(memento: GrantMemento): Record<string, unknown> {
   return isPlainObject(raw) ? raw : {};
 }
 
+/**
+ * A `readGrant` result annotated with whether re-validation dropped
+ * anything (N-6, PENTEST-REPORT-2026-08-23.md).
+ */
+interface ReadGrantResult {
+  readonly grant: StoredGrant;
+  /** `true` when at least one stored host failed today's `isSafeHostForPrompt` re-check and was dropped. */
+  readonly droppedUnsafeHost: boolean;
+}
+
+/**
+ * Reads the stored grant for `documentKey`, if any, and re-runs every one of
+ * its `allowedHosts` through `isSafeHostForPrompt` before returning it (N-6):
+ * a stored record's hosts were only ever validated at COLLECTION time,
+ * possibly under an older/buggier version of this module, or (with direct
+ * `workspaceState` write access) never validated at all. Trusting the shape
+ * check alone and not re-deriving the safety property at read time would let
+ * a planted or stale record become the effective allowlist verbatim. Any
+ * host that fails re-validation is dropped from the returned grant, and
+ * `droppedUnsafeHost` is set so `runGrantFlow` know it must not treat this as
+ * a clean cache hit — see its own comment at the call site.
+ */
 function readGrant(
   memento: GrantMemento,
   documentKey: string,
-): StoredGrant | undefined {
+): ReadGrantResult | undefined {
   const all = readAllGrants(memento);
   if (!hasOwn(all, documentKey)) return undefined;
   const candidate = all[documentKey];
-  return isStoredGrant(candidate) ? candidate : undefined;
+  if (!isStoredGrant(candidate)) return undefined;
+
+  const safeHosts = candidate.allowedHosts.filter(isSafeHostForPrompt);
+  return {
+    grant: { key: candidate.key, allowedHosts: safeHosts },
+    droppedUnsafeHost: safeHosts.length !== candidate.allowedHosts.length,
+  };
 }
 
 async function writeGrant(
@@ -245,13 +318,26 @@ function closureFrom(requirements: GrantFlowRequirements): GrantClosure {
 export async function runGrantFlow(
   options: GrantFlowOptions,
 ): Promise<GrantFlowResult> {
-  const { documentKey, requirements, memento, promptHost, promptUnknownHosts } =
-    options;
+  const {
+    documentKey,
+    requirements,
+    memento,
+    promptHost,
+    promptUnknownHosts,
+    promptManyHosts,
+  } = options;
 
   const key = await computeGrantKey(closureFrom(requirements));
   const stored = readGrant(memento, documentKey);
-  if (stored && stored.key === key) {
-    return { allowedHosts: [...stored.allowedHosts] };
+  // N-6: a matching key alone is not enough to reuse a stored grant with no
+  // prompting -- only take the fast path when EVERY stored host still
+  // passes today's safety re-check. If `readGrant` had to drop anything,
+  // the record is not trusted at all here; fall through to the ordinary
+  // prompt flow below, which re-derives from the note's CURRENT
+  // requirements and, once answered, overwrites the untrusted record via
+  // the normal `writeGrant` call at the end of this function.
+  if (stored && stored.grant.key === key && !stored.droppedUnsafeHost) {
+    return { allowedHosts: [...stored.grant.allowedHosts] };
   }
 
   const { safeHosts, needsUnknownPrompt } = partitionHosts(
@@ -259,13 +345,23 @@ export async function runGrantFlow(
     requirements.hasUnknownHosts,
   );
 
-  const allowedHosts: string[] = [];
-  for (const host of safeHosts) {
-    // Each prompt is modal; they must appear one at a time, never all at
-    // once, so this loop is deliberately sequential rather than
-    // `Promise.all`-ed.
-    const allowed = await promptHost(host);
-    if (allowed) allowedHosts.push(host);
+  let allowedHosts: string[];
+  if (safeHosts.length > MAX_HOST_PROMPTS) {
+    // PROMPT-STORM guard: too many distinct hosts for the per-host loop --
+    // fold the whole set into one consolidated all-or-nothing gate instead
+    // of opening `safeHosts.length` modals in a row. See `MAX_HOST_PROMPTS`'s
+    // doc comment.
+    const allowAll = await promptManyHosts(safeHosts.length);
+    allowedHosts = allowAll ? [...safeHosts] : [];
+  } else {
+    allowedHosts = [];
+    for (const host of safeHosts) {
+      // Each prompt is modal; they must appear one at a time, never all at
+      // once, so this loop is deliberately sequential rather than
+      // `Promise.all`-ed.
+      const allowed = await promptHost(host);
+      if (allowed) allowedHosts.push(host);
+    }
   }
 
   let finalAllowedHosts = allowedHosts;

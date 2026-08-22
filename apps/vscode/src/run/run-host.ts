@@ -218,6 +218,31 @@ export async function spawnRun(options: SpawnRunOptions): Promise<RunResult> {
       });
     });
 
-    worker.postMessage(job);
+    // N-2 fix (PENTEST-REPORT-2026-08-23.md): `postMessage` structured-clones
+    // `job` synchronously, so an uncloneable payload (e.g. a value containing
+    // a function, or an object with a throwing `toString`) throws a
+    // `DataCloneError` right here, before any of the worker's own event
+    // handlers above have a chance to settle this promise. Left unguarded,
+    // that throw would propagate out of the executor and REJECT `spawnRun`'s
+    // promise, breaking its documented never-rejects contract. Route it
+    // through the same synthetic-failure `settle` path as every other
+    // failure mode instead, and let `settle`'s own `terminate()` clean up the
+    // worker that was already spawned (a safe no-op if the thread never
+    // finished starting).
+    try {
+      worker.postMessage(job);
+    } catch (err) {
+      settle({
+        values: {},
+        failures: [
+          {
+            name: '<document>',
+            message: `run could not be started: ${describeThrown(err)}`,
+            kind: 'script-error',
+          },
+        ],
+        cacheSnapshot: options.cacheSnapshot,
+      });
+    }
   });
 }

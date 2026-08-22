@@ -11,6 +11,7 @@ import {
   UNKNOWN_HOSTS_PROMPT_MESSAGE,
   clearGrantForDocument,
   hostPromptMessage,
+  manyHostsPromptMessage,
 } from './run/grant-flow.js';
 import { spawnRun } from './run/run-host.js';
 import { runOnce } from './run/run-flow.js';
@@ -371,6 +372,22 @@ async function promptUnknownHostsAdapter(): Promise<boolean> {
 }
 
 /**
+ * Prompts once for the PROMPT-STORM guard's consolidated "many hosts" gate
+ * (`run/grant-flow.ts`'s `MAX_HOST_PROMPTS`/`manyHostsPromptMessage`) instead
+ * of opening one modal per host once a note's distinct static host count
+ * exceeds the cap.
+ */
+async function promptManyHostsAdapter(hostCount: number): Promise<boolean> {
+  const choice = await vscode.window.showInformationMessage(
+    manyHostsPromptMessage(hostCount),
+    { modal: true },
+    ALLOW_LABEL,
+    DONT_ALLOW_LABEL,
+  );
+  return choice === ALLOW_LABEL;
+}
+
+/**
  * The `markii.runScripts` command handler: runs the currently previewed
  * document's scripts once (grant flow, then `spawnRun`) and posts the
  * outcome to the panel as a `values` message.
@@ -414,6 +431,7 @@ export async function runScripts(
       memento: context.workspaceState,
       promptHost: promptHostAdapter,
       promptUnknownHosts: promptUnknownHostsAdapter,
+      promptManyHosts: promptManyHostsAdapter,
       spawnRun,
       timeoutMs: RUN_TIMEOUT_MS,
     });

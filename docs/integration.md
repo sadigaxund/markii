@@ -97,15 +97,25 @@ importance:
 2. **The grant store and prompts.** Persist grants keyed by
    `computeGrantKey`'s executable-closure hash, re-prompt when the key
    changes, and word network prompts as "can send data to `<host>`".
-3. **Trigger discipline.** Route manual, auto, and scheduled runs through
+   Re-validate stored hosts when you read them back, so a record written by
+   an older or buggy version cannot reintroduce a host your current checks
+   would reject.
+3. **A bounded network capability.** The `net` implementation is the real
+   allowlist boundary, so it enforces it: resolve redirects yourself and
+   check every hop's host before requesting it, and bound each response to
+   the fetch-size cap rather than buffering a whole body. A request whose
+   host is built dynamically, and so cannot be named in advance, is denied;
+   a prompt offered for that case must not imply the request will be
+   allowed.
+4. **Trigger discipline.** Route manual, auto, and scheduled runs through
    the runtime's trigger parameter so the tier gate applies; schedules live
    in the app, never in scripts.
-4. **Value persistence.** Keep last-run values in app storage keyed by note
+5. **Value persistence.** Keep last-run values in app storage keyed by note
    identity, so plain files reopen with data while the vault directory stays
    untouched; write a bundle's `.cache/` only for bundles.
-5. **The vault stores.** Enforce one writer per published name, and back the
+6. **The vault stores.** Enforce one writer per published name, and back the
    `@`-prefixed reads with your vault store implementation.
-6. **The require mappings.** Map vault-library namespaces to folders, and
+7. **The require mappings.** Map vault-library namespaces to folders, and
    resolve pack modules, keeping the reserved bundle segments
    (`scripts`, `assets`, `.cache`) bundle-local.
 

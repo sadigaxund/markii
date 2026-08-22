@@ -15,6 +15,7 @@ import { runGrantFlow } from './grant-flow.js';
 import type {
   GrantMemento,
   PromptHost,
+  PromptManyHosts,
   PromptUnknownHosts,
 } from './grant-flow.js';
 import type { RunResult, SpawnRunOptions } from './run-host.js';
@@ -102,6 +103,8 @@ export interface RunOnceOptions {
   memento: GrantMemento;
   promptHost: PromptHost;
   promptUnknownHosts: PromptUnknownHosts;
+  /** PROMPT-STORM guard's consolidated gate — see `./grant-flow.ts`'s `MAX_HOST_PROMPTS`. */
+  promptManyHosts: PromptManyHosts;
   /** Injected so this function is testable with a fake worker runner — the real adapter passes `./run-host.ts`'s `spawnRun`. */
   spawnRun: (options: SpawnRunOptions) => Promise<RunResult>;
   timeoutMs: number;
@@ -132,6 +135,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
     memento: options.memento,
     promptHost: options.promptHost,
     promptUnknownHosts: options.promptUnknownHosts,
+    promptManyHosts: options.promptManyHosts,
   });
 
   const cacheKey = cacheStorageKeyFor(options.documentKey);

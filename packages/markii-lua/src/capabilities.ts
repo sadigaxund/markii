@@ -535,11 +535,29 @@ net.patch = function(url, body) return __smd_net_patch_blocked(url, body):await(
       // entry for next time. No denial is recorded for this path — a
       // capability denial is reserved for the fresh recompute itself
       // failing the WRITE side's own caps, which is unchanged.
+      //
+      // Finiteness alone isn't enough (pentest finding N-1): a poisoned
+      // snapshot with a huge FUTURE `storedAtMs` (e.g.
+      // `Number.MAX_SAFE_INTEGER * 1000`) is finite, so it used to pass
+      // straight through to the Lua-side `(now - storedAtMs) < ttl*1000`
+      // freshness check below, which then went hugely negative and
+      // reported the poisoned value as fresh forever — served without
+      // `fn()` ever running. `storedAtMs` must additionally be an integer
+      // and plausible: not before the epoch, and not after "now" as this
+      // same call sees it. `nowMs` is read once, right before the check,
+      // and reused for the equality bound so a genuine entry written and
+      // read in the same millisecond (`storedAtMs === nowMs`) is still a
+      // HIT, not a false self-heal.
+      const nowMs = Date.now();
+      const storedAtMs = (entry as { storedAtMs?: unknown }).storedAtMs;
       if (
         typeof entry !== 'object' ||
         entry === null ||
         Array.isArray(entry) ||
-        !Number.isFinite((entry as { storedAtMs?: unknown }).storedAtMs)
+        typeof storedAtMs !== 'number' ||
+        !Number.isInteger(storedAtMs) ||
+        storedAtMs < 0 ||
+        storedAtMs > nowMs
       ) {
         return undefined;
       }

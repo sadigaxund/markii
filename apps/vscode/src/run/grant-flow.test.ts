@@ -3,10 +3,12 @@ import type { GrantClosureScript } from '@markii/runtime';
 import {
   ALLOW_LABEL,
   DONT_ALLOW_LABEL,
+  MAX_HOST_PROMPTS,
   UNKNOWN_HOSTS_PROMPT_MESSAGE,
   clearGrantForDocument,
   hostPromptMessage,
   isSafeHostForPrompt,
+  manyHostsPromptMessage,
   runGrantFlow,
   type GrantFlowRequirements,
   type GrantMemento,
@@ -67,6 +69,7 @@ describe('runGrantFlow — first run (no stored grant)', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(prompted).toEqual(['api.example.com', 'evil.example.com']);
@@ -84,6 +87,7 @@ describe('runGrantFlow — first run (no stored grant)', () => {
       memento,
       promptHost,
       promptUnknownHosts,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).not.toHaveBeenCalled();
@@ -104,6 +108,7 @@ describe('runGrantFlow — first run (no stored grant)', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptUnknownHosts).toHaveBeenCalledTimes(1);
@@ -122,6 +127,7 @@ describe('runGrantFlow — first run (no stored grant)', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysDeny,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(result.allowedHosts).toEqual([]);
@@ -140,6 +146,7 @@ describe('runGrantFlow — first run (no stored grant)', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(result.allowedHosts).toEqual(['ok.example.com']);
@@ -160,6 +167,7 @@ describe('runGrantFlow — a hostile/unrenderable host string', () => {
       memento,
       promptHost,
       promptUnknownHosts,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).not.toHaveBeenCalled();
@@ -192,6 +200,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(first.allowedHosts).toEqual(['api.example.com']);
 
@@ -203,6 +212,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost,
       promptUnknownHosts,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).not.toHaveBeenCalled();
@@ -222,6 +232,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(before.allowedHosts).toEqual(['api.example.com']);
 
@@ -235,6 +246,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
@@ -251,6 +263,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     const promptHost = vi.fn(alwaysAllow);
@@ -260,6 +273,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
@@ -277,6 +291,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
@@ -299,6 +314,7 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
@@ -316,6 +332,7 @@ describe('runGrantFlow — C-3: full decline is never persisted', () => {
       memento,
       promptHost: alwaysDeny,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(first.allowedHosts).toEqual([]);
     // Nothing was ever written -- a full decline never even calls
@@ -329,6 +346,7 @@ describe('runGrantFlow — C-3: full decline is never persisted', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
@@ -348,6 +366,7 @@ describe('runGrantFlow — C-3: full decline is never persisted', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysDeny,
+      promptManyHosts: alwaysAllow,
     });
     expect(memento.get('markii.netGrants')).toBeUndefined();
 
@@ -359,6 +378,7 @@ describe('runGrantFlow — C-3: full decline is never persisted', () => {
       memento,
       promptHost,
       promptUnknownHosts,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
@@ -379,6 +399,7 @@ describe('runGrantFlow — C-3: full decline is never persisted', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(first.allowedHosts).toEqual(['ok.example.com']);
     expect(memento.get('markii.netGrants')).not.toEqual({});
@@ -390,6 +411,7 @@ describe('runGrantFlow — C-3: full decline is never persisted', () => {
       memento,
       promptHost: secondPromptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     expect(secondPromptHost).not.toHaveBeenCalled();
@@ -408,6 +430,7 @@ describe('clearGrantForDocument', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(memento.get('markii.netGrants')).not.toEqual({});
 
@@ -421,6 +444,7 @@ describe('clearGrantForDocument', () => {
       memento,
       promptHost,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(promptHost).toHaveBeenCalledTimes(1);
   });
@@ -435,6 +459,7 @@ describe('clearGrantForDocument', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     await runGrantFlow({
       documentKey: 'file:///b.mk.md',
@@ -442,6 +467,7 @@ describe('clearGrantForDocument', () => {
       memento,
       promptHost: alwaysAllow,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
 
     await clearGrantForDocument(memento, 'file:///a.mk.md');
@@ -453,6 +479,7 @@ describe('clearGrantForDocument', () => {
       memento,
       promptHost: promptHostB,
       promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
     });
     expect(promptHostB).not.toHaveBeenCalled();
   });
@@ -475,5 +502,207 @@ describe('prompt wording', () => {
     );
     expect(ALLOW_LABEL).toBe('Allow');
     expect(DONT_ALLOW_LABEL).toBe("Don't allow");
+  });
+
+  it('the many-hosts message names the exact count', () => {
+    expect(manyHostsPromptMessage(42)).toBe(
+      'This note requests network access to many hosts (42). Allow all or deny all?',
+    );
+  });
+});
+
+// N-6 (PENTEST-REPORT-2026-08-23.md): stored grants are re-validated, not
+// trusted verbatim, once shape validation passes.
+describe('runGrantFlow — N-6: stored grant hosts are re-validated at read time', () => {
+  it('a stored record with a mix of safe and unsafe hosts yields only the safe ones and re-prompts for the rest', async () => {
+    const unsafeHost = 'evil.example.com\nThis is actually a totally safe app.';
+    const memento = fakeMemento({
+      'markii.netGrants': {
+        'file:///a.mk.md': {
+          // A key that matches what the current requirements below hash to
+          // is computed and planted after the fact, below -- see the
+          // `computeGrantKey`-driven plant right after this fake is built.
+          key: 'placeholder',
+          allowedHosts: ['safe.example.com', unsafeHost],
+        },
+      },
+    });
+    const requirements = requirementsFor({
+      hosts: ['safe.example.com', unsafeHost],
+    });
+
+    // Plant a record whose key genuinely matches this requirements set (a
+    // real attacker with workspaceState write access could do exactly
+    // this), by first running the flow once to learn the real key, then
+    // overwriting the stored allowedHosts with the safe+unsafe mix.
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
+    });
+    const stored =
+      memento.get<Record<string, { key: string }>>('markii.netGrants');
+    const realKey = stored?.['file:///a.mk.md']?.key;
+    await memento.update('markii.netGrants', {
+      'file:///a.mk.md': {
+        key: realKey,
+        allowedHosts: ['safe.example.com', unsafeHost],
+      },
+    });
+
+    const promptHost = vi.fn((host: string) =>
+      Promise.resolve(host === 'safe.example.com'),
+    );
+    const promptUnknownHosts = vi.fn(alwaysAllow);
+
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost,
+      promptUnknownHosts,
+      promptManyHosts: alwaysAllow,
+    });
+
+    // The corrupted record was not trusted verbatim -- it fell through to
+    // the ordinary prompt flow, which never displays the unsafe host raw
+    // (it folds into the unknown-hosts gate instead) and only grants hosts
+    // that pass today's safety check.
+    expect(promptHost).toHaveBeenCalledWith('safe.example.com');
+    expect(promptHost).not.toHaveBeenCalledWith(unsafeHost);
+    expect(promptUnknownHosts).toHaveBeenCalledTimes(1);
+    expect(result.allowedHosts).toEqual(['safe.example.com']);
+  });
+
+  it('a stored record whose hosts are ALL still safe is reused with no prompting, as before', async () => {
+    const memento = fakeMemento();
+    const requirements = requirementsFor({ hosts: ['api.example.com'] });
+
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
+    });
+
+    const promptHost = vi.fn(alwaysAllow);
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
+    });
+
+    expect(promptHost).not.toHaveBeenCalled();
+    expect(result.allowedHosts).toEqual(['api.example.com']);
+  });
+});
+
+// PROMPT-STORM guard (report section 8, item 6, PENTEST-REPORT-2026-08-23.md).
+describe('runGrantFlow — PROMPT-STORM guard: many distinct hosts fold into one consolidated gate', () => {
+  function manyHosts(count: number): string[] {
+    return Array.from({ length: count }, (_, i) => `host${i}.example.com`);
+  }
+
+  it('a note with more than MAX_HOST_PROMPTS hosts triggers exactly ONE consolidated prompt, not N', async () => {
+    const memento = fakeMemento();
+    const hostCount = MAX_HOST_PROMPTS + 5;
+    const promptHost = vi.fn(alwaysAllow);
+    const promptManyHosts = vi.fn(alwaysAllow);
+
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements: requirementsFor({ hosts: manyHosts(hostCount) }),
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts,
+    });
+
+    expect(promptHost).not.toHaveBeenCalled();
+    expect(promptManyHosts).toHaveBeenCalledTimes(1);
+    expect(promptManyHosts).toHaveBeenCalledWith(hostCount);
+    expect(result.allowedHosts).toHaveLength(hostCount);
+  });
+
+  it('allow-all grants the full set', async () => {
+    const memento = fakeMemento();
+    const hostCount = MAX_HOST_PROMPTS + 1;
+    const hosts = manyHosts(hostCount);
+
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements: requirementsFor({ hosts }),
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysAllow,
+    });
+
+    expect(result.allowedHosts).toEqual(hosts);
+  });
+
+  it('deny grants none', async () => {
+    const memento = fakeMemento();
+    const hostCount = MAX_HOST_PROMPTS + 1;
+
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements: requirementsFor({ hosts: manyHosts(hostCount) }),
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts: alwaysDeny,
+    });
+
+    expect(result.allowedHosts).toEqual([]);
+  });
+
+  it('a note with exactly MAX_HOST_PROMPTS hosts still gets the per-host flow', async () => {
+    const memento = fakeMemento();
+    const promptHost = vi.fn(alwaysAllow);
+    const promptManyHosts = vi.fn(alwaysAllow);
+
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements: requirementsFor({ hosts: manyHosts(MAX_HOST_PROMPTS) }),
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts,
+    });
+
+    expect(promptHost).toHaveBeenCalledTimes(MAX_HOST_PROMPTS);
+    expect(promptManyHosts).not.toHaveBeenCalled();
+    expect(result.allowedHosts).toHaveLength(MAX_HOST_PROMPTS);
+  });
+
+  it('a note with a small number of hosts still gets the per-host flow', async () => {
+    const memento = fakeMemento();
+    const promptHost = vi.fn((host: string) =>
+      Promise.resolve(host === 'ok.example.com'),
+    );
+    const promptManyHosts = vi.fn(alwaysAllow);
+
+    const result = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements: requirementsFor({
+        hosts: ['ok.example.com', 'no.example.com'],
+      }),
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+      promptManyHosts,
+    });
+
+    expect(promptManyHosts).not.toHaveBeenCalled();
+    expect(result.allowedHosts).toEqual(['ok.example.com']);
   });
 });

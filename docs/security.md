@@ -15,6 +15,14 @@ specific host. An untrusted note opened from anywhere starts with zero
 grants and still renders fully, because scripts only feed values: the page
 degrades to empty and stale component states, never to a broken document.
 
+Opening a note runs no code, but it is not the same as making no network
+requests at all. A note may reference remote images by URL, and rendering
+one fetches it, exactly as opening any markdown or HTML document that links
+an image does. This is the ordinary web-content posture, the same one the
+host editor's built-in markdown preview takes; it is worth stating plainly
+because "opening is safe" is true of execution, not of every byte that
+leaves the machine.
+
 ## Capabilities
 
 A bundle's manifest declares what its scripts want:
@@ -43,6 +51,25 @@ modules it requires. If any of that code changes, the grant is stale and the
 host prompts again. Without this rule, edited shared code would silently
 inherit grants that were made to different code. The reference
 implementation of the key is `computeGrantKey` in `@markii/runtime`.
+
+A grant is scoped to a hostname, and only to a hostname. Granting
+`api.github.com` authorizes every port, path, query string, and scheme on
+that host, including a redirect from one path to another, for the life of
+the grant. A host implementation follows redirects manually and re-checks
+each hop against the same allowlist, so a redirect cannot cross to a host
+the user did not grant; but a redirect that stays on the granted host is
+allowed, wherever on that host it points. Two consequences follow. First,
+because the boundary is the hostname string, a script that builds a request
+URL at run time rather than writing it as a literal cannot be reasoned about
+in advance: the host cannot know which hostname it will name, so such a
+request is denied unless its host was granted through some other literal in
+the same note. Second, hostname allowlists share the standard limitation of
+their kind: a granted name whose DNS record changes between the grant and
+the request (DNS rebinding) can resolve somewhere the user did not intend,
+which a hostname check cannot detect. Pinning resolution and refusing
+private or loopback address ranges is the mitigation if a deployment needs
+it; the reference host does not do this yet, and grants for loopback or
+link-local hosts should be treated as the elevated trust they are.
 
 ## Triggers cap capabilities
 
@@ -170,10 +197,41 @@ dynamically, repeating the pattern the earlier audit's first finding had
 already fixed in the marshaller. All four fixes carry regression tests
 that re-run the original probes.
 
+The first host to run scripts, the VS Code extension, brought the isolate
+requirement and the capability providers out of the library and into a real
+application, and that surface was assessed twice: an adversarial pass before
+merge and an independent red-team engagement afterward (August 2026). Both
+worked against the real pipeline: a real worker thread, the real Lua
+sandbox, and real network endpoints. Neither found a sandbox escape, a
+request past a granted hostname, a script-value path into the page as
+markup, or a way for a note to run code on open. The external watchdog
+terminated every runaway shape put to it, including the historical
+`pcall`-loop deadlock, an allocation flood, and a request to an endpoint
+that never answers.
+
+The engagement's findings were fixes to the layers around that core, all
+now landed with regression tests: a network redirect is resolved hop by hop
+and each hop's host is re-checked before it is contacted, so a redirect
+cannot reach a host the user did not grant; a response body is bounded to
+the fetch-size cap as it streams rather than buffered whole, and the worker
+runs under a capped heap, so neither a flood nor a decompression bomb can
+exhaust the host; a cache entry with an implausible timestamp is treated as
+a miss rather than served as permanently fresh; network denials are marked
+by identity rather than by a string a script could print, so a script
+cannot relabel its own failure; stored grants are re-validated when read; a
+note that names many hosts folds into one consolidated prompt rather than a
+storm of them; and the values sent to the page carry only a failure's kind,
+never its text. Two limits of hostname-based grants are documented above
+rather than closed in code: such a grant covers every port and path on the
+host, and it cannot detect a DNS record that changes after the grant.
+
 Three areas remain intentionally outside the audited surface, and are
 tracked rather than forgotten: the four known hang reproductions are covered
 by dedicated deadlock tests rather than re-executed in CI (re-triggering a
 genuine hang would wedge the test runner); the external terminatable isolate
-is the embedding host's code and does not exist in this repository; and the
-`require` jail cannot be audited until the packs feature wires it up, at
-which point it needs its own adversarial pass.
+is now exercised by the extension's own tests but its behavior inside a live
+editor host is the application's to verify; and the `require` jail cannot be
+audited until the packs feature wires it up, at which point it needs its own
+adversarial pass. One consent-wording refinement is deferred: a prompt
+offered when a note builds network addresses dynamically is honest that such
+requests are denied, and is tracked for rewording to state that outright.

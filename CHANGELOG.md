@@ -25,6 +25,25 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   reads to the fetch-size cap. A new `markii.resetScriptGrants` command
   clears a note's saved grant. Manual runs only; auto-run stays disabled.
 
+### Security
+
+- **Run-arc hardening (post-pentest)**: an independent red-team pass on the
+  script-execution path produced fixes now landed with regression tests. The
+  net provider resolves redirects hop by hop and re-checks each host before
+  contacting it (no SSRF past a granted hostname); response bodies are
+  bounded to the fetch-size cap as they stream and the worker runs under a
+  capped heap (no flood or decompression-bomb OOM); a cache entry with an
+  implausible (future or non-integer) timestamp is treated as a miss rather
+  than served as permanently fresh; network denials are marked by identity,
+  so a script can no longer relabel its own failure as `capability-denied`;
+  a credential-bearing redirect target is denied and never contacted; stored
+  grants are re-validated on read; a note naming more than ten hosts folds
+  into one consolidated prompt; values sent to the preview carry only a
+  failure's kind, never its text; `spawnRun` no longer rejects on an
+  uncloneable payload; and the webview CSP nonce uses a CSPRNG. Hostname-only
+  grant scope and the DNS-rebinding limitation are documented in
+  `docs/security.md`.
+
 ### Changed
 
 - **Cache self-heals (`@markii/lua`)**: `cache.get` treats a host-stored

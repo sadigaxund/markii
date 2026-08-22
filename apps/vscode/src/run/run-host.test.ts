@@ -569,3 +569,194 @@ describe('spawnRun — worker crash', () => {
     expect(result.failures[0]?.message).toMatch(/7/);
   });
 });
+
+describe('spawnRun — N-2: postMessage guard for uncloneable payloads', () => {
+  it('an uncloneable cacheSnapshot resolves to a synthetic failure instead of rejecting (never-rejects contract)', async () => {
+    const text = fence('a', 'return 1');
+    // A function anywhere in the structured-clone payload makes
+    // `postMessage` throw `DataCloneError` synchronously, before the
+    // executor's `resolve` is ever reachable through the ordinary
+    // message/error/exit paths -- see PENTEST-REPORT-2026-08-23.md's N-2.
+    const uncloneableCacheSnapshot = {
+      k: { toString: () => 'x' },
+    } as unknown as Record<string, import('@markii/lua').CacheEntry>;
+
+    const resultPromise = spawnRun({
+      text,
+      netAllowlist: [],
+      cacheSnapshot: uncloneableCacheSnapshot,
+      timeoutMs: 5000,
+      workerPath: WORKER_PATH,
+    });
+
+    // The whole point of N-2: this must resolve, never reject.
+    await expect(resultPromise).resolves.toBeDefined();
+    const result = await resultPromise;
+
+    expect(result.values).toEqual({});
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.kind).toBe('script-error');
+  });
+});
+
+describe('spawnRun — N-3/N-4: net-denial classification is identity-based, not text-matched', () => {
+  it('a forged "MARKII_NET_DENIED" string from a script is NOT reclassified as capability-denied', async () => {
+    const text = fence('a', 'error("MARKII_NET_DENIED: total fabrication")');
+    const result = await spawnRun({
+      text,
+      netAllowlist: [],
+      cacheSnapshot: {},
+      timeoutMs: 5000,
+      workerPath: WORKER_PATH,
+    });
+
+    expect(result.failures).toHaveLength(1);
+    // The script never made a network call at all -- this must stay an
+    // ordinary runtime failure, never a permission-flavored one a script
+    // could use to relabel its own bug.
+    expect(result.failures[0]?.kind).not.toBe('capability-denied');
+    expect(result.values.a?.failureKind).not.toBe('capability-denied');
+  });
+
+  it('a real blocked redirect is still classified as capability-denied (the genuine case keeps working)', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(302, { Location: 'http://also-not-allowed.example.com/x' });
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `return net.fetch_json("http://127.0.0.1:${port}/start")`,
+      );
+      const result = await spawnRun({
+        text,
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        workerPath: WORKER_PATH,
+      });
+
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.kind).toBe('capability-denied');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('a credential-bearing redirect Location is denied as capability-denied and the target is never contacted (N-4)', async () => {
+    let targetHitCount = 0;
+    const targetServer = http.createServer((_req, res) => {
+      targetHitCount++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      targetServer.listen(0, '127.0.0.1', resolve),
+    );
+    const targetAddress = targetServer.address();
+    const targetPort =
+      typeof targetAddress === 'object' && targetAddress
+        ? targetAddress.port
+        : 0;
+
+    const redirectingServer = http.createServer((_req, res) => {
+      res.writeHead(302, {
+        // Same allowed host, but the Location embeds credentials -- Node's
+        // `fetch` refuses to construct a `Request` for a credentialed URL.
+        Location: `http://user:pass@127.0.0.1:${targetPort}/city`,
+      });
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      redirectingServer.listen(0, '127.0.0.1', resolve),
+    );
+    const redirectingAddress = redirectingServer.address();
+    const redirectingPort =
+      typeof redirectingAddress === 'object' && redirectingAddress
+        ? redirectingAddress.port
+        : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `return net.fetch_json("http://127.0.0.1:${redirectingPort}/start")`,
+      );
+      const result = await spawnRun({
+        text,
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        workerPath: WORKER_PATH,
+      });
+
+      expect(targetHitCount).toBe(0);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.kind).toBe('capability-denied');
+    } finally {
+      await new Promise<void>((resolve) =>
+        redirectingServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) => targetServer.close(() => resolve()));
+    }
+  });
+});
+
+// N-11 (PENTEST-REPORT-2026-08-23.md): silent data quirks, pinned as
+// executable evidence so behavior can't drift unnoticed. None of these are
+// exploitable (see the report); this is documentation, not a fix.
+describe('spawnRun — N-11: silent data quirks (pinned, not changed)', () => {
+  it('a Lua table key literally "__proto__" is silently dropped crossing Lua -> JS, with no prototype pollution', async () => {
+    const text = fence('a', 'return {["__proto__"] = "x", safe = "y"}');
+    const result = await spawnRun({
+      text,
+      netAllowlist: [],
+      cacheSnapshot: {},
+      timeoutMs: 5000,
+      workerPath: WORKER_PATH,
+    });
+
+    expect(result.failures).toEqual([]);
+    const value = result.values.a?.value as Record<string, unknown>;
+    expect(value).toEqual({ safe: 'y' });
+    expect(Object.prototype.hasOwnProperty.call(value, '__proto__')).toBe(
+      false,
+    );
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+  });
+
+  it('a script literally named "__proto__" produces no store entry, silently', async () => {
+    const text = fence('__proto__', 'return 1');
+    const result = await spawnRun({
+      text,
+      netAllowlist: [],
+      cacheSnapshot: {},
+      timeoutMs: 5000,
+      workerPath: WORKER_PATH,
+    });
+
+    expect(
+      Object.prototype.hasOwnProperty.call(result.values, '__proto__'),
+    ).toBe(false);
+    expect(Object.getPrototypeOf(result.values)).toBe(Object.prototype);
+  });
+
+  it('a script returning {["__smd_is_array"]=true, ...} is reshaped into an array', async () => {
+    const text = fence('a', 'return {["__smd_is_array"]=true, a="x", b="y"}');
+    const result = await spawnRun({
+      text,
+      netAllowlist: [],
+      cacheSnapshot: {},
+      timeoutMs: 5000,
+      workerPath: WORKER_PATH,
+    });
+
+    expect(result.failures).toEqual([]);
+    expect(Array.isArray(result.values.a?.value)).toBe(true);
+  });
+});

@@ -1184,6 +1184,153 @@ describe('runScript — adversarial verification pass fixes', () => {
     expect(stored.value).toBe('fresh');
   });
 
+  it('N-1: a poisoned host-stored entry with a huge FUTURE storedAtMs (Number.MAX_SAFE_INTEGER*1000) self-heals as a MISS instead of being served as fresh forever', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'POISON', storedAtMs: Number.MAX_SAFE_INTEGER * 1000 }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const before = Date.now();
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    const after = Date.now();
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+    expect(stored.storedAtMs).toBeGreaterThanOrEqual(before);
+    expect(stored.storedAtMs).toBeLessThanOrEqual(after);
+  });
+
+  it('N-1: a poisoned host-stored entry with storedAtMs slightly in the future (now + 1e6) self-heals as a MISS', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'POISON', storedAtMs: Date.now() + 1_000_000 }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+  });
+
+  it('N-1: a poisoned host-stored entry with a non-integer storedAtMs (123.5) self-heals as a MISS', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'POISON', storedAtMs: 123.5 }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+  });
+
+  it('N-1: a poisoned host-stored entry with a negative storedAtMs self-heals as a MISS', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'POISON', storedAtMs: -1 }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+  });
+
+  it('N-1 boundary: storedAtMs === now (as seen by the same call) is a valid, plausible entry and is served as a HIT (fn never called)', async () => {
+    const now = Date.now();
+    const store = new Map<string, unknown>([
+      ['k', { value: 'good', storedAtMs: now }],
+    ]);
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async () => {
+        throw new Error('should not be called: entry is fresh');
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'good', calls: 0 } });
+  });
+
   it('D1: rebinding __smd_marshal_root before a later cache.get call does not bypass the write-side cap', async () => {
     const store = new Map<string, { value: unknown; storedAtMs: number }>();
     const cache = {

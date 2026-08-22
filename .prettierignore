@@ -13,6 +13,8 @@ TODO.md
 # Orchestrator-owned prose (long-form; not Prettier-managed).
 docs/
 TODO.md
+# Audit artifacts: verbatim reports, kept as written; verdict folds into docs/security.md
+PENTEST-REPORT-*.md
 # conformance fixtures are byte-exact test data — formatters must not rewrite them
 conformance/
 # Mark documents: Prettier's markdown formatter breaks directive fences

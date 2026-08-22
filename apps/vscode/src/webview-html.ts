@@ -6,6 +6,8 @@
  * isolation, without a real `vscode.Webview` in the loop.
  */
 
+import { randomBytes } from 'node:crypto';
+
 export interface WebviewHtmlOptions {
   readonly scriptUri: string;
   readonly styleUri: string;
@@ -111,15 +113,29 @@ function pickNonceChar(sample: number): string {
 }
 
 /**
+ * A `[0, 1)` sample drawn from `node:crypto`'s CSPRNG (N-9 fix,
+ * PENTEST-REPORT-2026-08-23.md) rather than `Math.random`, which is not
+ * cryptographically strong in V8 and is unsuitable as the sole source of
+ * entropy for something whose whole job is being unguessable. Reads 4 random
+ * bytes as an unsigned 32-bit integer and scales it into `[0, 1)`, matching
+ * `Math.random`'s own contract closely enough that `pickNonceChar` needs no
+ * changes.
+ */
+function cryptoRandom(): number {
+  return randomBytes(4).readUInt32BE(0) / 0x100000000;
+}
+
+/**
  * Generates a fresh 32-character `[A-Za-z0-9]` nonce for one `script-src
  * 'nonce-...'` CSP value / `<script nonce="...">` pair. `preview-panel.ts`
  * calls this once per `buildWebviewHtml` call (never reused across HTML
  * loads, so a stale nonce can never authorize a new script).
  *
- * `randomValues` defaults to `Math.random` and is injectable so tests get a
- * deterministic sequence instead of depending on real randomness.
+ * `randomValues` defaults to `cryptoRandom` (a CSPRNG source) and is
+ * injectable so tests get a deterministic sequence instead of depending on
+ * real randomness.
  */
-export function createNonce(randomValues: () => number = Math.random): string {
+export function createNonce(randomValues: () => number = cryptoRandom): string {
   let nonce = '';
   for (let i = 0; i < NONCE_LENGTH; i++) {
     nonce += pickNonceChar(randomValues());

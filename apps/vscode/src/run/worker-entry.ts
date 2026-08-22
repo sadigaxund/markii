@@ -34,6 +34,7 @@
  */
 import { parentPort } from 'node:worker_threads';
 import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 
 import { extractScripts, parse } from '@markii/core';
@@ -100,29 +101,53 @@ function hostnameOf(url: string): string | undefined {
 }
 
 /**
- * Prefix tag on every `Error` this module's `NetProvider` throws for a
- * policy denial (an ungranted host, a redirect off the allowlist, too many
- * redirects, an over-size response). This is NOT the same kind of denial as
- * `@markii/lua`'s own `netGrants` check inside `buildCapabilities` (which
- * records on its own out-of-band `CapabilityDenials` handle and is caught
- * there) — a denial detected HERE happens inside this provider's own `get`/
- * `post`/`patch`, one level below that check, so it surfaces from
- * `thread.run()` as an ordinary thrown error and would otherwise be
- * misclassified as a `'script-error'` (adversarial finding B-3). `runJob`
- * below scans for this tag on every failed script/value and reclassifies it
- * as `'capability-denied'` — a net-provider policy refusal is a permission
- * problem, never a bug in the script.
+ * Tag on every `Error` this module's `NetProvider` throws for a policy
+ * denial (an ungranted host, a redirect off the allowlist, too many
+ * redirects, an over-size response, a credential-bearing redirect target).
+ * This is NOT the same kind of denial as `@markii/lua`'s own `netGrants`
+ * check inside `buildCapabilities` (which records on its own out-of-band
+ * `CapabilityDenials` handle and is caught there) — a denial detected HERE
+ * happens inside this provider's own `get`/`post`/`patch`, one level below
+ * that check, so it surfaces from `thread.run()` as an ordinary thrown error
+ * and would otherwise be misclassified as a `'script-error'` (adversarial
+ * finding B-3). `runJob` below scans for this tag on every failed
+ * script/value and reclassifies it as `'capability-denied'` — a net-provider
+ * policy refusal is a permission problem, never a bug in the script.
+ *
+ * N-3 fix (PENTEST-REPORT-2026-08-23.md): a script can call
+ * `error("MARKII_NET_DENIED: fake")` itself, and a fixed public tag string
+ * has no way to tell that apart from a genuine denial once both have
+ * crossed back out through wasmoon's Lua `pcall`/`error()` as plain text —
+ * Lua only ever carries a string error value, so there is no channel here to
+ * attach a non-spoofable Error subclass or symbol-keyed marker that would
+ * survive the round trip intact (that IS available inside `@markii/lua`
+ * itself, via its own out-of-band `CapabilityDenials` handle, but this
+ * provider is one layer below that: a plain callback `@markii/lua` invokes
+ * and awaits, with no visibility into its internals). The fix applied here
+ * is the strongest one available at this seam without changing
+ * `@markii/lua`: each job generates a fresh 128-bit random tag via
+ * `node:crypto`, used ONLY for this one run and never exposed to the Lua
+ * environment (not a global, not returned in any value, never logged) — a
+ * script cannot know it, so it cannot forge a match. `createNetDenialTag`
+ * is called once per `runJob` invocation, and the resulting `netDenied`/
+ * `isNetDenialMessage` pair is threaded through instead of using a
+ * module-level constant.
  */
-const NET_DENIAL_TAG = 'MARKII_NET_DENIED';
-
-/** A tagged denial — see `NET_DENIAL_TAG`'s doc comment. */
-function netDenied(message: string): Error {
-  return new Error(`${NET_DENIAL_TAG}: ${message}`);
+function createNetDenialTag(): string {
+  return `MARKII_NET_DENIED:${randomBytes(16).toString('hex')}`;
 }
 
-/** A tagged failure carries `NET_DENIAL_TAG` in its message — see `NET_DENIAL_TAG`'s doc comment. Never throws. */
-function isNetDenialMessage(message: string | undefined): boolean {
-  return message !== undefined && message.includes(NET_DENIAL_TAG);
+/** A tagged denial, scoped to one job's unpredictable `tag` — see `createNetDenialTag`'s doc comment. */
+function makeNetDenied(tag: string): (message: string) => Error {
+  return (message: string) => new Error(`${tag}: ${message}`);
+}
+
+/** A tagged failure carries this job's exact `tag` in its message — see `createNetDenialTag`'s doc comment. Never throws. */
+function makeIsNetDenialMessage(
+  tag: string,
+): (message: string | undefined) => boolean {
+  return (message: string | undefined) =>
+    message !== undefined && message.includes(tag);
 }
 
 /**
@@ -141,7 +166,7 @@ const MAX_REDIRECTS = 5;
  * given) the moment the running byte total exceeds the cap — the whole
  * response is never buffered first. This mirrors the denial
  * `@markii/lua`'s own `maxFetchBytes` cap already produces for an
- * over-size response (see `NET_DENIAL_TAG`'s doc comment on why this
+ * over-size response (see `createNetDenialTag`'s doc comment on why this
  * provider's OWN cap must exist at all: the sandbox's cap runs on the text
  * this function already returned, too late to bound the read itself).
  */
@@ -149,6 +174,7 @@ async function readBoundedBody(
   response: Response,
   maxFetchBytes: number,
   controller: AbortController,
+  netDenied: (message: string) => Error,
 ): Promise<string> {
   const declaredLength = response.headers.get('content-length');
   if (declaredLength !== null) {
@@ -214,6 +240,7 @@ async function readBoundedBody(
 function createNetProvider(
   allowlist: readonly string[],
   maxFetchBytes: number,
+  netDenied: (message: string) => Error,
 ): NetProvider {
   const allowed = new Set(allowlist.map((host) => host.toLowerCase()));
 
@@ -230,12 +257,25 @@ function createNetProvider(
       }
 
       const controller = new AbortController();
-      const response = await fetch(url, {
-        method,
-        body,
-        redirect: 'manual',
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method,
+          body,
+          redirect: 'manual',
+          signal: controller.signal,
+        });
+      } catch (err) {
+        // N-4 fix (PENTEST-REPORT-2026-08-23.md): a redirect Location that
+        // embeds credentials (`https://user:pass@host/...`) makes Node's
+        // `fetch` throw `TypeError: Request cannot be constructed from a URL
+        // that includes credentials` at construction time — the request is
+        // never actually sent, so this is a pure misclassification, not a
+        // real script bug. Convert it into an ordinary provider denial (same
+        // treatment every other policy refusal in this loop gets) instead of
+        // letting it surface as an unclassified `'script-error'`.
+        throw netDenied(`redirect target rejected: ${describeThrown(err)}`);
+      }
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
@@ -264,6 +304,7 @@ function createNetProvider(
         response,
         maxFetchBytes,
         controller,
+        netDenied,
       );
       return { status: response.status, body: responseBody };
     }
@@ -334,7 +375,12 @@ async function runJob(job: RunJob): Promise<RunResult> {
   // computed once, here, rather than letting each side default
   // independently, so the two can never quietly disagree.
   const maxFetchBytes = job.limits?.maxFetchBytes ?? DEFAULT_MAX_FETCH_BYTES;
-  const net = createNetProvider(netAllowlist, maxFetchBytes);
+  // N-3 fix: a fresh, unpredictable denial tag per job — see
+  // `createNetDenialTag`'s doc comment.
+  const netDenialTag = createNetDenialTag();
+  const netDenied = makeNetDenied(netDenialTag);
+  const isNetDenialMessage = makeIsNetDenialMessage(netDenialTag);
+  const net = createNetProvider(netAllowlist, maxFetchBytes, netDenied);
 
   const tree = parse(job.text);
   const scripts = extractScripts(tree);
@@ -385,7 +431,7 @@ async function runJob(job: RunJob): Promise<RunResult> {
         // B-3: a net-provider policy denial (a blocked redirect, an
         // over-size body, too many hops) throws a plain `Error` one level
         // below `@markii/lua`'s own capability-denial recording (see
-        // `NET_DENIAL_TAG`'s doc comment above), so it would otherwise
+        // `createNetDenialTag`'s doc comment above), so it would otherwise
         // land here as an ordinary `'script-error'`. Reclassify it as a
         // capability denial — the note asked for something the allowlist
         // refused, not a bug in the script.

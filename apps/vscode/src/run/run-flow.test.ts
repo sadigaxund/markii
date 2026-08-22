@@ -52,6 +52,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
@@ -85,6 +86,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
@@ -116,6 +118,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
@@ -147,6 +150,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
@@ -170,6 +174,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
@@ -196,6 +201,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
@@ -218,6 +224,7 @@ describe('runOnce', () => {
       memento,
       promptHost: () => Promise.resolve(true),
       promptUnknownHosts: () => Promise.resolve(true),
+      promptManyHosts: () => Promise.resolve(true),
       spawnRun,
       timeoutMs: 15000,
     });
