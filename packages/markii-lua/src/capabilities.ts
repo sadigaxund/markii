@@ -518,18 +518,31 @@ net.patch = function(url, body) return __smd_net_patch_blocked(url, body):await(
       // the script completely uncapped even though the FETCH path was
       // already capped.
       //
-      // An entry that fails the budget check, or that cannot be
-      // `JSON.stringify`'d at all (cyclic, or BigInt-bearing — something
-      // other than this sandbox's own WRITE side must have written it,
-      // since that side already rejects both), is SELF-HEALED rather than
-      // denied (orchestrator decision, #6 verification notes): it is
-      // treated as a cache MISS, exactly as if `key` had never been
-      // stored. `cache.get`'s Lua body (below) then calls `fn()` and
-      // writes the fresh, already-capped result back through
-      // `__smd_cache_set_raw`, which quietly repairs the stored entry for
-      // next time. No denial is recorded for this path — a capability
-      // denial is reserved for the fresh recompute itself failing the
-      // WRITE side's own caps, which is unchanged.
+      // An entry that fails the budget check, isn't a plain object at all,
+      // or carries a missing/non-finite `storedAtMs` (adversarial finding:
+      // a poisoned host snapshot like `{value: 'x'}` with no `storedAtMs`,
+      // or `storedAtMs: 'abc'`, would otherwise reach the Lua-side
+      // `now - storedAtMs` arithmetic in `cache.get` below and throw a
+      // script-error, wedging the note permanently instead of self-healing)
+      // — or that cannot be `JSON.stringify`'d at all (cyclic, or
+      // BigInt-bearing — something other than this sandbox's own WRITE
+      // side must have written it, since that side already rejects both) —
+      // is SELF-HEALED rather than denied (orchestrator decision, #6
+      // verification notes): it is treated as a cache MISS, exactly as if
+      // `key` had never been stored. `cache.get`'s Lua body (below) then
+      // calls `fn()` and writes the fresh, already-capped result back
+      // through `__smd_cache_set_raw`, which quietly repairs the stored
+      // entry for next time. No denial is recorded for this path — a
+      // capability denial is reserved for the fresh recompute itself
+      // failing the WRITE side's own caps, which is unchanged.
+      if (
+        typeof entry !== 'object' ||
+        entry === null ||
+        Array.isArray(entry) ||
+        !Number.isFinite((entry as { storedAtMs?: unknown }).storedAtMs)
+      ) {
+        return undefined;
+      }
       const budgetCheck = checkJsonWithinLimits(entry.value, marshalLimits);
       if (!budgetCheck.ok) return undefined;
       let text: string;

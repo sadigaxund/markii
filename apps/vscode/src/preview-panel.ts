@@ -9,6 +9,7 @@ import {
   ALLOW_LABEL,
   DONT_ALLOW_LABEL,
   UNKNOWN_HOSTS_PROMPT_MESSAGE,
+  clearGrantForDocument,
   hostPromptMessage,
 } from './run/grant-flow.js';
 import { spawnRun } from './run/run-host.js';
@@ -383,6 +384,17 @@ async function promptUnknownHostsAdapter(): Promise<boolean> {
  * the document may keep changing underneath) — the webview
  * (`webview/preview.tsx`) drops a `values` message whose revision no
  * longer matches what it is currently displaying.
+ *
+ * C-5: this function is called as a floating promise (`void runScripts(...)`
+ * in `extension.ts`), so it must NEVER reject — every awaited step here
+ * (a grant prompt, `Memento.update` inside `runOnce`, `spawnRun`, and the
+ * final `postMessage`) is a `vscode`/host-provided call that can in
+ * principle reject, and an uncaught rejection on a floating promise
+ * surfaces to the user as nothing at all (an "unhandled rejection" only
+ * VS Code's own logs would ever show). The whole body is therefore wrapped
+ * in a `try/catch` that shows one short, stack-free error message instead,
+ * and `preview.running` is always cleared in `finally` regardless of which
+ * path was taken.
  */
 export async function runScripts(
   context: vscode.ExtensionContext,
@@ -406,16 +418,60 @@ export async function runScripts(
       timeoutMs: RUN_TIMEOUT_MS,
     });
 
+    // The panel may have been disposed (or replaced by a fresh one — see
+    // `retargetPreview`) while the run above was in flight; `active` no
+    // longer being this exact `preview` means there is nothing left to post
+    // to, and touching `preview.panel` past disposal would itself throw.
+    if (active !== preview) return;
+
     const message: ValuesMessage = {
       type: 'values',
       revision,
       values: result.values,
       failures: result.failures,
     };
-    void preview.panel.webview.postMessage(message);
+    // Awaited (not fire-and-forget) so a rejection here — e.g. a disposal
+    // racing this exact call — lands in the catch below instead of becoming
+    // its own unhandled rejection.
+    await preview.panel.webview.postMessage(message);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('markii.runScripts failed:', detail);
+    // Quiet, stack-free message — AGENTS.md's cleanliness principle: the
+    // rendered page (and its surrounding UI) shows quiet markers, never
+    // error dumps.
+    void vscode.window.showErrorMessage(
+      "Markii: running this note's scripts failed.",
+    );
   } finally {
     preview.running = false;
   }
+}
+
+/**
+ * The `markii.resetScriptGrants` command handler (C-3): clears the
+ * persisted network grant for the active Markii document, so the next
+ * `markii.runScripts` press prompts fresh for every host again — the escape
+ * hatch for a partial grant the user wants to revisit without editing the
+ * note's code (which would change the grant key and force a re-prompt
+ * anyway, but is not always what someone wants to do just to see the
+ * prompt again).
+ */
+export async function resetScriptGrants(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const document = activePreviewableDocument() ?? active?.document;
+  if (!document) {
+    void vscode.window.showInformationMessage(
+      'Open a .mk.md document to reset its script permissions.',
+    );
+    return;
+  }
+
+  await clearGrantForDocument(context.workspaceState, document.uri.toString());
+  void vscode.window.showInformationMessage(
+    "Markii: cleared this note's saved script permissions. The next run will prompt again.",
+  );
 }
 
 /**

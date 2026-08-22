@@ -44,6 +44,11 @@
         "title": "Run Scripts",
         "category": "Markii",
         "icon": "$(play)"
+      },
+      {
+        "command": "markii.resetScriptGrants",
+        "title": "Reset Script Grants",
+        "category": "Markii"
       }
     ],
     "menus": {
@@ -67,6 +72,10 @@
         {
           "command": "markii.runScripts",
           "when": "markii.previewActive"
+        },
+        {
+          "command": "markii.resetScriptGrants",
+          "when": "editorLangId == markdown || markii.previewActive"
         }
       ]
     },

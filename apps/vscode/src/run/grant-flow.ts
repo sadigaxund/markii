@@ -25,6 +25,11 @@
  * plain map. A stored record whose `key` no longer matches the freshly
  * computed one is a MISS — this module never trusts a stale record's
  * `allowedHosts`, even partially; the whole grant re-derives from scratch.
+ * A record is only ever WRITTEN when `allowedHosts` ends up non-empty — a
+ * full decline is never persisted, so it simply re-prompts next time (see
+ * `runGrantFlow`'s own comment on this, C-3) — and `clearGrantForDocument`
+ * removes a document's record outright, for the `markii.resetScriptGrants`
+ * command.
  *
  * ## The two prompt shapes
  *
@@ -274,10 +279,44 @@ export async function runGrantFlow(
     }
   }
 
-  await writeGrant(memento, documentKey, {
-    key,
-    allowedHosts: finalAllowedHosts,
-  });
+  // C-3: a FULL decline (no host ended up allowed) is deliberately NOT
+  // persisted. Persisting `{key, allowedHosts: []}` would otherwise disable
+  // network for this note's exact current code FOREVER — a single
+  // mis-click on "Don't allow" (or declining the unknown-hosts gate) would
+  // silently and permanently suppress every future prompt, with no stored
+  // record even hinting that happened and no way to revoke it short of
+  // editing the code (which changes the grant key anyway). Only ever
+  // writing a grant with at least one allowed host means a full decline
+  // simply re-prompts on the next Run press, exactly like a first run — the
+  // ordinary, recoverable outcome. A PARTIAL grant (at least one host
+  // allowed) is still persisted normally, and `clearGrantForDocument` below
+  // gives an explicit way to revoke a persisted grant when the user wants a
+  // fresh prompt without changing the note's code.
+  if (finalAllowedHosts.length > 0) {
+    await writeGrant(memento, documentKey, {
+      key,
+      allowedHosts: finalAllowedHosts,
+    });
+  }
 
   return { allowedHosts: finalAllowedHosts };
+}
+
+/**
+ * Clears the persisted grant (if any) for `documentKey` — the
+ * `markii.resetScriptGrants` command's whole implementation (C-3): with no
+ * stored record, `runGrantFlow`'s next call for this document is
+ * indistinguishable from a first run, so it prompts fresh for every host
+ * again. A no-op, not an error, when there is nothing stored for this
+ * document.
+ */
+export async function clearGrantForDocument(
+  memento: GrantMemento,
+  documentKey: string,
+): Promise<void> {
+  const all = readAllGrants(memento);
+  if (!hasOwn(all, documentKey)) return;
+  const next = { ...all };
+  delete next[documentKey];
+  await memento.update(GRANTS_STORAGE_KEY, next);
 }

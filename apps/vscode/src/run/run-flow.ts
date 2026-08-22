@@ -21,6 +21,36 @@ import type { RunResult, SpawnRunOptions } from './run-host.js';
 import type { ValuesFailure } from '../protocol.js';
 import type { StoredValue } from '@markii/runtime';
 
+/**
+ * Strips a `StoredValue`'s `error` field before it ever reaches the wire
+ * (D-1): `.error` is whatever text the executor happened to produce —
+ * a raw Lua traceback, or (worse, per B-3) a net-provider denial message
+ * that can embed the actual request URL/host — and none of that is meant
+ * for the rendered page (AGENTS.md's cleanliness principle: quiet markers,
+ * never error dumps). This mirrors exactly what `runOnce` below already
+ * does to `RunResult.failures` (reduced to `{name, kind}`, never the raw
+ * message): `failureKind` is kept, so a renderer (`@markii/react`'s
+ * `failure-presentation.ts`) still branches on the closed `FailureKind`
+ * taxonomy — nothing in this reference renderer ever reads `.error` for
+ * display, only for a value that DIDN'T fail (`status !== 'error'`), where
+ * `error` is absent anyway.
+ */
+function scrubStoredValueForWire(value: StoredValue): StoredValue {
+  if (value.status !== 'error' || value.error === undefined) return value;
+  const { error: _error, ...rest } = value;
+  return rest;
+}
+
+function scrubValuesForWire(
+  values: Record<string, StoredValue>,
+): Record<string, StoredValue> {
+  const scrubbed: Record<string, StoredValue> = {};
+  for (const [name, value] of Object.entries(values)) {
+    scrubbed[name] = scrubStoredValueForWire(value);
+  }
+  return scrubbed;
+}
+
 /** A `CacheEntry`-keyed snapshot, structurally — this module never imports `@markii/lua` just for the type; it only ever passes the value through. */
 export type CacheSnapshot = Record<string, unknown>;
 
@@ -89,7 +119,9 @@ export interface RunOnceResult {
  * snapshot is written back — capped, never partially. The returned shape
  * is exactly what the `values` wire message (`../protocol.ts`) needs,
  * minus the `revision` tag, which the caller (who knows what revision this
- * run was actually performed against) attaches.
+ * run was actually performed against) attaches. Every `StoredValue`'s raw
+ * `error` text is stripped before it is returned (D-1, `scrubValuesForWire`
+ * above) — same treatment `failures` already got.
  */
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   const requirements = extractRunRequirements(options.text);
@@ -122,7 +154,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   );
 
   return {
-    values: result.values,
+    values: scrubValuesForWire(result.values),
     failures: result.failures.map((failure) => ({
       name: failure.name,
       kind: failure.kind,

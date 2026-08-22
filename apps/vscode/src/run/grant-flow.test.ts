@@ -4,6 +4,7 @@ import {
   ALLOW_LABEL,
   DONT_ALLOW_LABEL,
   UNKNOWN_HOSTS_PROMPT_MESSAGE,
+  clearGrantForDocument,
   hostPromptMessage,
   isSafeHostForPrompt,
   runGrantFlow,
@@ -301,6 +302,166 @@ describe('runGrantFlow — grant reuse on a matching key', () => {
     });
 
     expect(promptHost).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runGrantFlow — C-3: full decline is never persisted', () => {
+  it('declining the only host re-prompts on the very next run (no permanent lockout from one mis-click)', async () => {
+    const memento = fakeMemento();
+    const requirements = requirementsFor({ hosts: ['api.example.com'] });
+
+    const first = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysDeny,
+      promptUnknownHosts: alwaysAllow,
+    });
+    expect(first.allowedHosts).toEqual([]);
+    // Nothing was ever written -- a full decline never even calls
+    // `memento.update`, so the key stays entirely absent.
+    expect(memento.get('markii.netGrants')).toBeUndefined();
+
+    const promptHost = vi.fn(alwaysAllow);
+    const second = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+    });
+
+    expect(promptHost).toHaveBeenCalledTimes(1);
+    expect(second.allowedHosts).toEqual(['api.example.com']);
+  });
+
+  it('declining the unknown-hosts gate is also never persisted, and re-prompts next time', async () => {
+    const memento = fakeMemento();
+    const requirements = requirementsFor({
+      hosts: ['api.example.com'],
+      hasUnknownHosts: true,
+    });
+
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysDeny,
+    });
+    expect(memento.get('markii.netGrants')).toBeUndefined();
+
+    const promptHost = vi.fn(alwaysAllow);
+    const promptUnknownHosts = vi.fn(alwaysAllow);
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost,
+      promptUnknownHosts,
+    });
+
+    expect(promptHost).toHaveBeenCalledTimes(1);
+    expect(promptUnknownHosts).toHaveBeenCalledTimes(1);
+  });
+
+  it('a partial grant (at least one host allowed) IS persisted and reused with no re-prompt', async () => {
+    const memento = fakeMemento();
+    const requirements = requirementsFor({
+      hosts: ['ok.example.com', 'no.example.com'],
+    });
+    const promptHost = (host: string) =>
+      Promise.resolve(host === 'ok.example.com');
+
+    const first = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+    });
+    expect(first.allowedHosts).toEqual(['ok.example.com']);
+    expect(memento.get('markii.netGrants')).not.toEqual({});
+
+    const secondPromptHost = vi.fn(alwaysAllow);
+    const second = await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: secondPromptHost,
+      promptUnknownHosts: alwaysAllow,
+    });
+
+    expect(secondPromptHost).not.toHaveBeenCalled();
+    expect(second.allowedHosts).toEqual(['ok.example.com']);
+  });
+});
+
+describe('clearGrantForDocument', () => {
+  it('removes a stored grant, so the next run prompts fresh', async () => {
+    const memento = fakeMemento();
+    const requirements = requirementsFor({ hosts: ['api.example.com'] });
+
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+    });
+    expect(memento.get('markii.netGrants')).not.toEqual({});
+
+    await clearGrantForDocument(memento, 'file:///a.mk.md');
+    expect(memento.get('markii.netGrants')).toEqual({});
+
+    const promptHost = vi.fn(alwaysAllow);
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost,
+      promptUnknownHosts: alwaysAllow,
+    });
+    expect(promptHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("never touches another document's grant", async () => {
+    const memento = fakeMemento();
+    const requirements = requirementsFor({ hosts: ['api.example.com'] });
+
+    await runGrantFlow({
+      documentKey: 'file:///a.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+    });
+    await runGrantFlow({
+      documentKey: 'file:///b.mk.md',
+      requirements,
+      memento,
+      promptHost: alwaysAllow,
+      promptUnknownHosts: alwaysAllow,
+    });
+
+    await clearGrantForDocument(memento, 'file:///a.mk.md');
+
+    const promptHostB = vi.fn(alwaysAllow);
+    await runGrantFlow({
+      documentKey: 'file:///b.mk.md',
+      requirements,
+      memento,
+      promptHost: promptHostB,
+      promptUnknownHosts: alwaysAllow,
+    });
+    expect(promptHostB).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op (never throws) when nothing is stored for the document', async () => {
+    const memento = fakeMemento();
+    await expect(
+      clearGrantForDocument(memento, 'file:///never-run.mk.md'),
+    ).resolves.toBeUndefined();
   });
 });
 

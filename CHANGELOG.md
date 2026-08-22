@@ -13,14 +13,28 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   unknown-directive fallback instead of escaping `renderMark`, in every
   directive form and through alias resolution.
 
+### Added
+
+- **Script execution in the VS Code extension**: a `markii.runScripts`
+  command with a play button on the preview title bar runs a note's Lua
+  in a terminatable `worker_thread` behind an external wall-clock
+  watchdog, feeding results into the already-shipped value-store render
+  path. Network access is granted per host, keyed to a hash of the note's
+  executable code so any code change re-prompts; the worker's net provider
+  re-checks every redirect hop against the allowlist and bounds response
+  reads to the fetch-size cap. A new `markii.resetScriptGrants` command
+  clears a note's saved grant. Manual runs only; auto-run stays disabled.
+
 ### Changed
 
 - **Cache self-heals (`@markii/lua`)**: `cache.get` treats a host-stored
-  entry that exceeds the marshal caps or cannot be JSON-encoded (cyclic or
-  BigInt-bearing) as a cache miss: it recomputes, overwrites the bad
-  entry, and returns the fresh value, instead of denying the call until
-  the host evicts the entry. A denial is still raised if the freshly
-  computed value itself fails the write-side caps.
+  entry that cannot be used as a cache miss: it recomputes, overwrites the
+  bad entry, and returns the fresh value, instead of denying the call
+  until the host evicts the entry. This covers an entry that exceeds the
+  marshal caps, cannot be JSON-encoded (cyclic or BigInt-bearing), is not
+  a plain object, or carries a missing or non-finite `storedAtMs`. A
+  denial is still raised only if the freshly computed value itself fails
+  the write-side caps.
 
 - **The format is named Markii** (rhymes with marquee), one name
   everywhere. This unifies the earlier split where titles said "Mark II"

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -149,6 +149,304 @@ describe('spawnRun — net allowlist', () => {
     // The sandbox/run as a whole is unharmed by the denial.
     expect(result.values.ok?.status).toBe('fresh');
     expect(result.values.ok?.value).toBe(2);
+  });
+});
+
+describe('spawnRun — net allowlist: redirect handling (B-1)', () => {
+  it('a redirect from an allowed host to a NON-allowed host is refused WITHOUT the second host ever being hit', async () => {
+    let secondHitCount = 0;
+    const secondServer = http.createServer((_req, res) => {
+      secondHitCount++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      secondServer.listen(0, '127.0.0.1', resolve),
+    );
+    const secondAddress = secondServer.address();
+    const secondPort =
+      typeof secondAddress === 'object' && secondAddress
+        ? secondAddress.port
+        : 0;
+
+    const firstServer = http.createServer((_req, res) => {
+      res.writeHead(302, {
+        Location: `http://localhost:${secondPort}/city`,
+      });
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      firstServer.listen(0, '127.0.0.1', resolve),
+    );
+    const firstAddress = firstServer.address();
+    const firstPort =
+      typeof firstAddress === 'object' && firstAddress ? firstAddress.port : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `return net.fetch_json("http://127.0.0.1:${firstPort}/start")`,
+      );
+      const result = await spawnRun({
+        text,
+        // Only the FIRST host is granted -- "localhost" (the redirect
+        // target) resolves to a different hostname string than
+        // "127.0.0.1" even though both point at the loopback interface,
+        // so this exercises exactly the SSRF shape B-1 closes.
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        workerPath: WORKER_PATH,
+      });
+
+      expect(secondHitCount).toBe(0);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.kind).toBe('capability-denied');
+    } finally {
+      await new Promise<void>((resolve) => firstServer.close(() => resolve()));
+      await new Promise<void>((resolve) => secondServer.close(() => resolve()));
+    }
+  });
+
+  it('a redirect to an ALLOWED host still succeeds', async () => {
+    const targetServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ city: 'Shelbyville' }));
+    });
+    await new Promise<void>((resolve) =>
+      targetServer.listen(0, '127.0.0.1', resolve),
+    );
+    const targetAddress = targetServer.address();
+    const targetPort =
+      typeof targetAddress === 'object' && targetAddress
+        ? targetAddress.port
+        : 0;
+
+    const redirectingServer = http.createServer((_req, res) => {
+      res.writeHead(302, {
+        Location: `http://127.0.0.1:${targetPort}/city`,
+      });
+      res.end();
+    });
+    await new Promise<void>((resolve) =>
+      redirectingServer.listen(0, '127.0.0.1', resolve),
+    );
+    const redirectingAddress = redirectingServer.address();
+    const redirectingPort =
+      typeof redirectingAddress === 'object' && redirectingAddress
+        ? redirectingAddress.port
+        : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `local r = net.fetch_json("http://127.0.0.1:${redirectingPort}/start")\nreturn r.city`,
+      );
+      const result = await spawnRun({
+        text,
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        workerPath: WORKER_PATH,
+      });
+
+      expect(result.failures).toEqual([]);
+      expect(result.values.a?.value).toBe('Shelbyville');
+    } finally {
+      await new Promise<void>((resolve) =>
+        redirectingServer.close(() => resolve()),
+      );
+      await new Promise<void>((resolve) => targetServer.close(() => resolve()));
+    }
+  });
+});
+
+describe('spawnRun — net allowlist: oversized body (B-2)', () => {
+  it('a response streamed past the byte cap is aborted, never fully buffered, and denied as capability-denied', async () => {
+    let bytesSent = 0;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      // Keep writing chunks past the (tiny, script-configured) cap. If the
+      // worker's read is genuinely bounded rather than buffered whole, this
+      // interval is cleared and the connection torn down well before it
+      // could ever produce anywhere near this much data.
+      const chunk = '{"pad":"' + 'x'.repeat(1000) + '"}'; // ~1010 bytes/chunk
+      const interval = setInterval(() => {
+        bytesSent += chunk.length;
+        res.write(chunk);
+      }, 5);
+      res.on('close', () => clearInterval(interval));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `return net.fetch_json("http://127.0.0.1:${port}/big")`,
+      );
+      const result = await spawnRun({
+        text,
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        // A cap far below what the JSON parser would even accept as valid
+        // JSON -- the point here is proving the READ is bounded, not that
+        // the sandbox's own post-hoc size check (which would also catch an
+        // unbounded read, just too late) ever runs.
+        limits: { maxFetchBytes: 2000 },
+        workerPath: WORKER_PATH,
+      });
+
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.kind).toBe('capability-denied');
+      // The server was still writing well past the cap when the worker
+      // aborted -- proof the read didn't wait for the whole (effectively
+      // unbounded) body before giving up.
+      expect(bytesSent).toBeLessThan(200_000);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 10_000);
+
+  it('a Content-Length over the cap is rejected before any body is read', async () => {
+    let bodyWriteAttempted = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': '10000000',
+      });
+      // The declared length is a lie relative to what's actually sent --
+      // this proves the header check alone is enough to refuse the
+      // response without ever touching the stream.
+      bodyWriteAttempted = true;
+      res.end('{}');
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `return net.fetch_json("http://127.0.0.1:${port}/declared-big")`,
+      );
+      const result = await spawnRun({
+        text,
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        limits: { maxFetchBytes: 2000 },
+        workerPath: WORKER_PATH,
+      });
+
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]?.kind).toBe('capability-denied');
+      expect(bodyWriteAttempted).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe('spawnRun — net.post / net.patch share the GET allowlist (B-6)', () => {
+  it('an allowed host accepts a POST', async () => {
+    let receivedBody = '';
+    const server = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (chunk: Buffer) => {
+        raw += chunk.toString();
+      });
+      req.on('end', () => {
+        receivedBody = raw;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ received: true }));
+      });
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+
+    try {
+      const text = fence(
+        'a',
+        `local r = net.post("http://127.0.0.1:${port}/x", '{"n":1}')\nreturn r.status`,
+      );
+      const result = await spawnRun({
+        text,
+        netAllowlist: ['127.0.0.1'],
+        cacheSnapshot: {},
+        timeoutMs: 5000,
+        workerPath: WORKER_PATH,
+      });
+
+      expect(result.failures).toEqual([]);
+      expect(result.values.a?.value).toBe(200);
+      expect(receivedBody).toBe('{"n":1}');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('a non-allowed host is denied for POST just like it is for GET', async () => {
+    const text = fence('a', `return net.post("http://127.0.0.1:9/x", "{}")`);
+    const result = await spawnRun({
+      text,
+      netAllowlist: ['some-other-host.example.com'],
+      cacheSnapshot: {},
+      timeoutMs: 5000,
+      workerPath: WORKER_PATH,
+    });
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.kind).toBe('capability-denied');
+  });
+});
+
+describe('spawnRun — worker resourceLimits (A-1)', () => {
+  it('a worker that busts its own capped JS heap resolves as a failure result, never crashing the host process', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'markii-run-host-test-'));
+    const oomWorkerPath = path.join(dir, 'oom-worker.cjs');
+    writeFileSync(
+      oomWorkerPath,
+      "const { parentPort } = require('node:worker_threads');\n" +
+        "parentPort.once('message', () => {\n" +
+        '  const balloon = [];\n' +
+        '  for (;;) { balloon.push(new Array(1000000).fill(0)); }\n' +
+        '});\n',
+    );
+
+    // `spawnRun` (`run-host.ts`) constructs every worker, including this
+    // rigged one, with `resourceLimits.maxOldGenerationSizeMb` (A-1's own
+    // fix) -- the balloon above should hit that cap and raise the worker's
+    // `'error'` event well within a couple hundred ms, long before the
+    // 2000ms external watchdog would otherwise need to step in as a
+    // backstop. Either way, the property under test is the same: the host
+    // process (this test process) survives, and `spawnRun` still resolves
+    // with an ordinary failure result rather than crashing or hanging.
+    const result = await spawnRun({
+      text: fence('a', 'return 1'),
+      netAllowlist: [],
+      cacheSnapshot: {},
+      timeoutMs: 2000,
+      workerPath: oomWorkerPath,
+    });
+
+    expect(result.values).toEqual({});
+    expect(result.failures).toHaveLength(1);
+  }, 15_000);
+
+  it('constructs the worker with resourceLimits.maxOldGenerationSizeMb set', () => {
+    const source = readFileSync(path.join(__dirname, 'run-host.ts'), 'utf8');
+    expect(source).toMatch(/resourceLimits/);
+    expect(source).toMatch(/maxOldGenerationSizeMb/);
   });
 });
 

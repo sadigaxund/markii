@@ -77,6 +77,25 @@ function execArgvFor(workerPath: string): string[] | undefined {
   return workerPath.endsWith('.ts') ? TSX_DEV_EXEC_ARGV : undefined;
 }
 
+/**
+ * `resourceLimits.maxOldGenerationSizeMb` for the spawned worker (A-1): a
+ * script's own Lua memory is already capped in-VM (`@markii/lua`'s
+ * `limits.maxMemoryBytes`), but nothing previously bounded the JS/V8 heap
+ * OF THE WORKER ITSELF — a large marshaled return value, an oversize
+ * fetched/cached JSON payload, or any other JS-side allocation this file's
+ * own code performs could still OOM that heap. Without an explicit
+ * `resourceLimits`, a V8 OOM inside a `worker_threads` worker is fatal to
+ * the WHOLE PROCESS (the extension host), not just that thread — exactly
+ * the failure mode the external, always-available `terminate()` watchdog
+ * above is meant to make impossible for a wedged/hostile script. 128MB is
+ * comfortably above what one script's marshaled result or one cached
+ * fetch response (`@markii/lua`'s `DEFAULT_MAX_FETCH_BYTES`, 2MB) should
+ * ever need, while still being small enough that a runaway allocation hits
+ * this cap, and the resulting worker `'error'` event, long before it could
+ * threaten the host process's own heap.
+ */
+const WORKER_MAX_OLD_GENERATION_SIZE_MB = 128;
+
 function describeThrown(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -109,7 +128,12 @@ export async function spawnRun(options: SpawnRunOptions): Promise<RunResult> {
     let settled = false;
     let watchdogFired = false;
 
-    const worker = new Worker(workerPath, execArgv ? { execArgv } : {});
+    const worker = new Worker(workerPath, {
+      ...(execArgv ? { execArgv } : {}),
+      resourceLimits: {
+        maxOldGenerationSizeMb: WORKER_MAX_OLD_GENERATION_SIZE_MB,
+      },
+    });
 
     const watchdog = setTimeout(() => {
       watchdogFired = true;

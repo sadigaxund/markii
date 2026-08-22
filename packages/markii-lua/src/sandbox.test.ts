@@ -10,6 +10,7 @@ import { DENIED_GLOBALS } from './globals';
 import type { ScriptLimits } from './limits';
 import * as marshalModule from './marshal';
 import { runScript, type RunScriptOptions } from './sandbox';
+import type { CacheEntry } from './capabilities';
 
 function u8(text: string): Uint8Array {
   return new TextEncoder().encode(text);
@@ -1007,6 +1008,180 @@ describe('runScript — adversarial verification pass fixes', () => {
     expect(r).toEqual({ ok: true, value: { result: 7, calls: 1 } });
     expect(setCalls).toBe(1);
     expect(store.get('k')?.value).toBe(7);
+  });
+
+  it('B2: a poisoned host-stored entry missing storedAtMs self-heals as a MISS instead of throwing a nil-arithmetic script error', async () => {
+    const store = new Map<string, unknown>([['k', { value: 'poison' }]]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+    expect(Number.isFinite(stored.storedAtMs)).toBe(true);
+  });
+
+  it('B2: a poisoned host-stored entry with a non-numeric storedAtMs self-heals as a MISS instead of throwing a type-mismatch script error', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'poison', storedAtMs: 'abc' }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+    expect(Number.isFinite(stored.storedAtMs)).toBe(true);
+  });
+
+  it('B2: a poisoned host-stored entry with NaN/Infinity storedAtMs self-heals as a MISS', async () => {
+    for (const badStoredAtMs of [NaN, Infinity, -Infinity]) {
+      const store = new Map<string, unknown>([
+        ['k', { value: 'poison', storedAtMs: badStoredAtMs }],
+      ]);
+      let setCalls = 0;
+      const cache = {
+        get: async (key: string) => store.get(key) as CacheEntry | undefined,
+        set: async (
+          key: string,
+          entry: { value: unknown; storedAtMs: number },
+        ) => {
+          setCalls++;
+          store.set(key, entry);
+        },
+      };
+      const r = await run(
+        `
+        local calls = 0
+        local function compute() calls = calls + 1; return "fresh" end
+        local result = cache.get("k", 3600, compute)
+        return { result = result, calls = calls }
+        `,
+        { cache },
+      );
+      expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+      expect(setCalls).toBe(1);
+      const stored = store.get('k') as { value: unknown; storedAtMs: number };
+      expect(stored.value).toBe('fresh');
+      expect(Number.isFinite(stored.storedAtMs)).toBe(true);
+    }
+  });
+
+  it('B2: a poisoned host-stored entry that is not an object at all (e.g. a bare number) self-heals as a MISS', async () => {
+    const store = new Map<string, unknown>([['k', 42]]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
+    expect(Number.isFinite(stored.storedAtMs)).toBe(true);
+  });
+
+  it('B2 regression: a VALID entry within TTL is still a hit (fn never called)', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'good', storedAtMs: Date.now() }],
+    ]);
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async () => {
+        throw new Error('should not be called: entry is fresh');
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 3600, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'good', calls: 0 } });
+  });
+
+  it('B2 regression: a VALID but expired entry still refreshes normally', async () => {
+    const store = new Map<string, unknown>([
+      ['k', { value: 'stale', storedAtMs: Date.now() - 1000 * 1000 }],
+    ]);
+    let setCalls = 0;
+    const cache = {
+      get: async (key: string) => store.get(key) as CacheEntry | undefined,
+      set: async (
+        key: string,
+        entry: { value: unknown; storedAtMs: number },
+      ) => {
+        setCalls++;
+        store.set(key, entry);
+      },
+    };
+    const r = await run(
+      `
+      local calls = 0
+      local function compute() calls = calls + 1; return "fresh" end
+      local result = cache.get("k", 1, compute)
+      return { result = result, calls = calls }
+      `,
+      { cache },
+    );
+    expect(r).toEqual({ ok: true, value: { result: 'fresh', calls: 1 } });
+    expect(setCalls).toBe(1);
+    const stored = store.get('k') as { value: unknown; storedAtMs: number };
+    expect(stored.value).toBe('fresh');
   });
 
   it('D1: rebinding __smd_marshal_root before a later cache.get call does not bypass the write-side cap', async () => {

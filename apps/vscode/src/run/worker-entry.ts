@@ -45,6 +45,7 @@ import {
 } from '@markii/runtime';
 import {
   createLuaExecutor,
+  DEFAULT_MAX_FETCH_BYTES,
   type CacheEntry,
   type CacheProvider,
   type NetProvider,
@@ -99,44 +100,180 @@ function hostnameOf(url: string): string | undefined {
 }
 
 /**
+ * Prefix tag on every `Error` this module's `NetProvider` throws for a
+ * policy denial (an ungranted host, a redirect off the allowlist, too many
+ * redirects, an over-size response). This is NOT the same kind of denial as
+ * `@markii/lua`'s own `netGrants` check inside `buildCapabilities` (which
+ * records on its own out-of-band `CapabilityDenials` handle and is caught
+ * there) — a denial detected HERE happens inside this provider's own `get`/
+ * `post`/`patch`, one level below that check, so it surfaces from
+ * `thread.run()` as an ordinary thrown error and would otherwise be
+ * misclassified as a `'script-error'` (adversarial finding B-3). `runJob`
+ * below scans for this tag on every failed script/value and reclassifies it
+ * as `'capability-denied'` — a net-provider policy refusal is a permission
+ * problem, never a bug in the script.
+ */
+const NET_DENIAL_TAG = 'MARKII_NET_DENIED';
+
+/** A tagged denial — see `NET_DENIAL_TAG`'s doc comment. */
+function netDenied(message: string): Error {
+  return new Error(`${NET_DENIAL_TAG}: ${message}`);
+}
+
+/** A tagged failure carries `NET_DENIAL_TAG` in its message — see `NET_DENIAL_TAG`'s doc comment. Never throws. */
+function isNetDenialMessage(message: string | undefined): boolean {
+  return message !== undefined && message.includes(NET_DENIAL_TAG);
+}
+
+/**
+ * A same-hop, same-host redirect chain is capped at this many hops (B-1):
+ * an allowed host is free to redirect a handful of times (a login/CDN
+ * bounce is common), but an unbounded chain is itself a resource-abuse
+ * shape worth refusing outright rather than following forever.
+ */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Reads `response`'s body, bounded to `maxFetchBytes` (B-2): a
+ * `content-length` header over the cap is rejected WITHOUT reading
+ * anything, and otherwise the body is streamed and the read is aborted
+ * (via `controller`, the same `AbortController` the triggering `fetch` was
+ * given) the moment the running byte total exceeds the cap — the whole
+ * response is never buffered first. This mirrors the denial
+ * `@markii/lua`'s own `maxFetchBytes` cap already produces for an
+ * over-size response (see `NET_DENIAL_TAG`'s doc comment on why this
+ * provider's OWN cap must exist at all: the sandbox's cap runs on the text
+ * this function already returned, too late to bound the read itself).
+ */
+async function readBoundedBody(
+  response: Response,
+  maxFetchBytes: number,
+  controller: AbortController,
+): Promise<string> {
+  const declaredLength = response.headers.get('content-length');
+  if (declaredLength !== null) {
+    const declared = Number(declaredLength);
+    if (Number.isFinite(declared) && declared > maxFetchBytes) {
+      throw netDenied(
+        `response declares ${declared} bytes, exceeding the ${maxFetchBytes}-byte cap`,
+      );
+    }
+  }
+
+  const body = response.body;
+  if (!body) {
+    // No body stream at all (e.g. a HEAD-shaped 204) — nothing to bound.
+    return response.text();
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxFetchBytes) {
+      controller.abort();
+      throw netDenied(`response exceeds the ${maxFetchBytes}-byte cap`);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
+}
+
+/**
  * The worker's `NetProvider` (`@markii/lua`): plain Node `fetch`, gated to
- * `allowlist`. This is DEFENSE IN DEPTH, not the primary gate — the
- * primary gate is `netGrants` passed to `createLuaExecutor` below, which
- * `@markii/lua`'s `buildCapabilities` already enforces before this
- * provider's `get` is ever called (a disallowed host never reaches here at
- * all; it comes back as the standard `'capability-denied'` failure kind,
- * recorded through `@markii/lua`'s non-spoofable denial-recording path —
- * see `capabilities.ts`). Two things this provider still checks on its own
- * because `buildCapabilities` cannot see them:
+ * `allowlist` for every one of `get`/`post`/`patch` — one allowlist governs
+ * all three (docs/security.md: "the per-host allowlist is the real
+ * boundary", not a GET/POST distinction). This is DEFENSE IN DEPTH, not the
+ * primary gate — the primary gate is `netGrants` passed to
+ * `createLuaExecutor` below, which `@markii/lua`'s `buildCapabilities`
+ * already enforces before this provider is ever called (a disallowed host
+ * never reaches here at all; it comes back as the standard
+ * `'capability-denied'` failure kind, recorded through `@markii/lua`'s
+ * non-spoofable denial-recording path — see `capabilities.ts`). Three
+ * things this provider still checks/bounds on its own because
+ * `buildCapabilities` cannot see them:
  *   - the allowlist is re-checked here too, so this provider is safe to
  *     reuse on its own (e.g. in a future capability) without relying on a
  *     caller to have already gated it;
- *   - a redirect landing on a host NOT in the allowlist is rejected — an
- *     allowed host redirecting the request elsewhere is exactly the SSRF
- *     shape a host-string allowlist is meant to close, and `buildCapabilities`
- *     only ever sees the ORIGINAL request URL, never where a 3xx response
- *     actually sent the request.
+ *   - a redirect is followed manually (`redirect: 'manual'`), never by
+ *     `fetch` itself, and EVERY hop's target host is checked against the
+ *     same allowlist BEFORE that hop is ever requested — an allowed host
+ *     redirecting the request elsewhere is exactly the SSRF shape a
+ *     host-string allowlist is meant to close, and `buildCapabilities` only
+ *     ever sees the ORIGINAL request URL, never where a 3xx response
+ *     actually sent the request. A hop landing on a non-allowed host is
+ *     refused WITHOUT that hop's request ever being made (B-1);
+ *   - the response body is read bounded to `maxFetchBytes`, never buffered
+ *     whole first — see `readBoundedBody` (B-2).
  */
-function createNetProvider(allowlist: readonly string[]): NetProvider {
+function createNetProvider(
+  allowlist: readonly string[],
+  maxFetchBytes: number,
+): NetProvider {
   const allowed = new Set(allowlist.map((host) => host.toLowerCase()));
-  return {
-    async get(url: string): Promise<NetResponse> {
+
+  async function fetchAllowed(
+    startUrl: string,
+    method: string,
+    body: string | undefined,
+  ): Promise<NetResponse> {
+    let url = startUrl;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const host = hostnameOf(url);
       if (!host || !allowed.has(host)) {
-        throw new Error(
-          `worker net provider: host "${host ?? url}" is not on the run's allowlist`,
-        );
+        throw netDenied(`host "${host ?? url}" is not on the run's allowlist`);
       }
-      const response = await fetch(url, { redirect: 'follow' });
-      const body = await response.text();
-      const finalHost = hostnameOf(response.url) ?? host;
-      if (!allowed.has(finalHost)) {
-        throw new Error(
-          `worker net provider: redirected to disallowed host "${finalHost}"`,
-        );
+
+      const controller = new AbortController();
+      const response = await fetch(url, {
+        method,
+        body,
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) {
+          throw netDenied('redirect response carried no Location header');
+        }
+        let nextUrl: string;
+        try {
+          nextUrl = new URL(location, url).toString();
+        } catch {
+          throw netDenied(
+            'redirect response carried an unparseable Location header',
+          );
+        }
+        const nextHost = hostnameOf(nextUrl);
+        if (!nextHost || !allowed.has(nextHost)) {
+          throw netDenied(
+            `redirected to disallowed host "${nextHost ?? nextUrl}"`,
+          );
+        }
+        url = nextUrl;
+        continue;
       }
-      return { status: response.status, body };
-    },
+
+      const responseBody = await readBoundedBody(
+        response,
+        maxFetchBytes,
+        controller,
+      );
+      return { status: response.status, body: responseBody };
+    }
+    throw netDenied(`exceeded ${MAX_REDIRECTS} redirects`);
+  }
+
+  return {
+    get: (url) => fetchAllowed(url, 'GET', undefined),
+    post: (url, requestBody) => fetchAllowed(url, 'POST', requestBody),
+    patch: (url, requestBody) => fetchAllowed(url, 'PATCH', requestBody),
   };
 }
 
@@ -191,16 +328,27 @@ function describeThrown(err: unknown): string {
 /** Runs one job to completion, never throwing — see this module's top doc comment. */
 async function runJob(job: RunJob): Promise<RunResult> {
   const cache = createSnapshotCacheProvider(job.cacheSnapshot ?? {});
-  const net = createNetProvider(job.netAllowlist ?? []);
+  const netAllowlist = job.netAllowlist ?? [];
+  // The SAME cap governs this worker's own bounded body read
+  // (`readBoundedBody`, B-2) and `@markii/lua`'s own `maxFetchBytes` check —
+  // computed once, here, rather than letting each side default
+  // independently, so the two can never quietly disagree.
+  const maxFetchBytes = job.limits?.maxFetchBytes ?? DEFAULT_MAX_FETCH_BYTES;
+  const net = createNetProvider(netAllowlist, maxFetchBytes);
 
   const tree = parse(job.text);
   const scripts = extractScripts(tree);
 
   const executor = createLuaExecutor({
     net,
-    netGrants: { get: job.netAllowlist ?? [], post: [] },
+    // One allowlist governs GET/POST/PATCH alike (B-6, docs/security.md:
+    // "the per-host allowlist is the real boundary") — the grant prompt's
+    // wording ("can send data to <host>") already promises exactly this,
+    // so POST/PATCH must be wired to the same hosts GET is, not silently
+    // disabled.
+    netGrants: { get: netAllowlist, post: netAllowlist },
     cache: cache.provider,
-    maxFetchBytes: job.limits?.maxFetchBytes,
+    maxFetchBytes,
     limits: {
       ...(job.limits?.wallClockMs !== undefined
         ? { wallClockMs: job.limits.wallClockMs }
@@ -228,14 +376,39 @@ async function runJob(job: RunJob): Promise<RunResult> {
       (entry: RunSummaryEntry): entry is RunSummaryEntry & { error: string } =>
         entry.status === 'error',
     )
-    .map((entry) => ({
-      name: entry.name,
-      message: entry.error ?? 'script failed',
-      kind: entry.failureKind ?? 'script-error',
-    }));
+    .map((entry) => {
+      const message = entry.error ?? 'script failed';
+      const kind = entry.failureKind ?? 'script-error';
+      return {
+        name: entry.name,
+        message,
+        // B-3: a net-provider policy denial (a blocked redirect, an
+        // over-size body, too many hops) throws a plain `Error` one level
+        // below `@markii/lua`'s own capability-denial recording (see
+        // `NET_DENIAL_TAG`'s doc comment above), so it would otherwise
+        // land here as an ordinary `'script-error'`. Reclassify it as a
+        // capability denial — the note asked for something the allowlist
+        // refused, not a bug in the script.
+        kind: isNetDenialMessage(message) ? 'capability-denied' : kind,
+      };
+    });
+
+  // Same reclassification for the value store's own `failureKind` — every
+  // `StoredValue` with `status: 'error'` was populated from the exact same
+  // `runOne` outcome the `failures` entry above came from, so a net denial
+  // must be reclassified there too (a renderer branches on
+  // `StoredValue.failureKind` directly — see `@markii/react`'s
+  // `failure-presentation.ts`).
+  const values: Record<string, import('@markii/runtime').StoredValue> = {};
+  for (const [name, entry] of Object.entries(store.snapshot())) {
+    values[name] =
+      entry.status === 'error' && isNetDenialMessage(entry.error)
+        ? { ...entry, failureKind: 'capability-denied' }
+        : entry;
+  }
 
   return {
-    values: store.snapshot(),
+    values,
     failures,
     cacheSnapshot: cache.snapshot(),
   };

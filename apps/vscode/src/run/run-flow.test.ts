@@ -92,6 +92,44 @@ describe('runOnce', () => {
     expect(result.failures).toEqual([{ name: 'a', kind: 'script-error' }]);
   });
 
+  it("D-1: strips a stored value's raw error text before returning it, keeping failureKind", async () => {
+    const memento = fakeMemento();
+    const spawnRun = () =>
+      Promise.resolve(
+        fakeRunResult({
+          values: {
+            a: {
+              value: undefined,
+              status: 'error',
+              error:
+                'net provider: redirected to disallowed host "evil.example.com" (https://api.example.com/x -> https://evil.example.com/y)',
+              failureKind: 'capability-denied',
+            },
+            b: { value: 42, status: 'fresh' },
+          },
+        }),
+      );
+
+    const result = await runOnce({
+      documentKey: 'file:///a.mk.md',
+      text: fence('a', 'return 1'),
+      memento,
+      promptHost: () => Promise.resolve(true),
+      promptUnknownHosts: () => Promise.resolve(true),
+      spawnRun,
+      timeoutMs: 15000,
+    });
+
+    expect(result.values.a).toEqual({
+      value: undefined,
+      status: 'error',
+      failureKind: 'capability-denied',
+    });
+    expect(result.values.a?.error).toBeUndefined();
+    // A value that never failed is untouched.
+    expect(result.values.b).toEqual({ value: 42, status: 'fresh' });
+  });
+
   it('seeds the run from a previously persisted cache snapshot for the same document', async () => {
     const documentKey = 'file:///a.mk.md';
     const memento = fakeMemento({
