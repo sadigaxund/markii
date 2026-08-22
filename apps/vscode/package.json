@@ -83,13 +83,17 @@
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "@markii/react": "*"
+    "@markii/core": "*",
+    "@markii/lua": "*",
+    "@markii/react": "*",
+    "@markii/runtime": "*"
   },
   "devDependencies": {
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.6.0",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.12"
   }
 }

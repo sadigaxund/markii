@@ -121,9 +121,10 @@ corpus is plain data — no TypeScript in `conformance/`.
 - Bundles: `fflate` (zip form; @markii/bundle only)
 - Lua sandbox: `wasmoon` (Lua 5.4 in WASM; @markii/lua only)
 - Package manager: npm (workspaces). No pnpm/yarn/bun.
-- VS Code extension only (`apps/vscode`, orchestrator-approved 2026-08-17):
-  `@types/vscode`, `@vscode/vsce`, `esbuild` (extension bundling). These
-  never enter `packages/*`.
+- VS Code extension only (`apps/vscode`, orchestrator-approved 2026-08-17;
+  tsx added 2026-08-22): `@types/vscode`, `@vscode/vsce`, `esbuild`
+  (extension bundling), `tsx` (dev-only: spawns the TypeScript worker
+  under Vitest). These never enter `packages/*`.
 
 ## Architecture rules (from the spec — violations are bugs)
 
