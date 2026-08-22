@@ -148,7 +148,7 @@ async function resolveInsideRoot(
  * Writes `data` to an already symlink-checked `target` that is known to
  * exist, refusing to write through a hard link (ESCAPE 3: `st_nlink > 1`
  * means some other path — possibly outside the bundle entirely, e.g.
- * `ln b.mkbundle/../victim.txt b.mkbundle/cache/hard` — refers to the exact same
+ * `ln b.mkz/../victim.txt b.mkz/cache/hard` — refers to the exact same
  * inode, so writing here would also silently modify that other path).
  *
  * Opens the file first *without* truncating (`'r+'`), `fstat`s the open

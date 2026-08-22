@@ -1,12 +1,12 @@
-# Welcome to Mark
+# Welcome to Markii
 
-This page is a Mark document, and you are standing inside the editor. Change
+This page is a Markii document, and you are standing inside the editor. Change
 anything in the left pane and the right pane re-renders as you type. Nothing
 you do here can break the page, so poke at everything.
 
 ## Start with what you know
 
-Everything markdown does still works: **bold**, links, lists, tables. Mark
+Everything markdown does still works: **bold**, links, lists, tables. Markii
 adds one rule on top: a *directive* places a component in the document.
 
 :::callout{type=info title="This box is a directive"}
@@ -77,8 +77,8 @@ attributes, no pixel values.
 Tabs hold alternative views of the same spot:
 
 ::::tabs
-:::tab{label="Why Mark?"}
-Notes deserve components without becoming code. A Mark file stays plain
+:::tab{label="Why Markii?"}
+Notes deserve components without becoming code. A Markii file stays plain
 readable markdown in every editor on earth.
 :::
 :::tab{label="Non-goals"}
@@ -127,5 +127,5 @@ Not rendered, because it is inside a fence.
 This playground is a demo, not the product. The format and its libraries
 live in the [repository](https://github.com/sadigaxund/markii); start with
 [the format guide](https://github.com/sadigaxund/markii/blob/main/docs/format.md)
-to learn everything a document can contain, or install the Mark II VS Code
+to learn everything a document can contain, or install the Markii VS Code
 extension to preview `.mk.md` files in your editor.

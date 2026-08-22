@@ -20,7 +20,7 @@ const VIEW_TYPE = 'markii.preview';
  * label is `panel.title`, set per document by `postUpdate`), but it is what
  * the webview developer-tools window and screen readers announce.
  */
-const DOCUMENT_TITLE = 'Mark Preview';
+const DOCUMENT_TITLE = 'Markii Preview';
 const DEBOUNCE_MS = 200; // matches apps/playground/src/App.tsx's DEBOUNCE_MS
 
 interface ActivePreview {
@@ -220,7 +220,7 @@ function activePreviewableDocument(): vscode.TextDocument | undefined {
  * (immediately), and rehydration when the panel becomes visible again.
  *
  * DECISION — `retainContextWhenHidden: false` plus state rehydration,
- * NOT context retention: retaining context would pin a full React + Mark
+ * NOT context retention: retaining context would pin a full React + Markii
  * renderer webview in memory for the entire life of the window, but this
  * extension's ENTIRE state is one string and one revision number. Instead,
  * the webview persists `{text, revision}` via `setState` on every applied

@@ -4,6 +4,20 @@ All notable changes to Mark and the `@markii/*` packages are recorded here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The format is named Markii** (rhymes with marquee), one name
+  everywhere. This unifies the earlier split where titles said "Mark II"
+  and prose said "Mark". A naming change only: package names (`@markii/*`),
+  APIs (`renderMark`), the `.mk.md` extension, and the manifest's `mark`
+  field are untouched.
+- **Bundles are `.mkz`** (both the directory and zip forms), replacing the
+  longer `.mkbundle`. Implementations, including `@markii/bundle`, keep
+  recognizing `.mkbundle` as a legacy alias; everything generated uses
+  `.mkz`.
+
 ## [0.3.1] - 2026-08-22
 
 ### Fixed

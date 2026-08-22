@@ -12,7 +12,7 @@ import type {
  * or storage of its own by design — the host injects these. This is a *dev
  * harness* implementation: a real app would route `net.get` through its own
  * SSRF/allowlist policy surface and back `cache` with durable bundle
- * storage (`.mkbundle/cache/`, spec §9/§11); here, a plain browser `fetch`
+ * storage (`.mkz/cache/`, spec §9/§11); here, a plain browser `fetch`
  * and an in-memory `Map` are enough to make the Run flow real.
  */
 

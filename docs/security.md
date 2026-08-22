@@ -1,6 +1,6 @@
 # Security model
 
-Reading a Mark document is always safe. Only running its scripts requires
+Reading a Markii document is always safe. Only running its scripts requires
 trust, and that trust is granted in small, specific pieces rather than one
 big dialog. This page describes the model and the current verification
 status of the reference sandbox.
@@ -8,7 +8,7 @@ status of the reference sandbox.
 ## No "trust this note?" dialog
 
 A blanket trust prompt is the Word-macro model, and its history is the
-history of macro malware: users click OK. Mark inverts it. Scripts are
+history of macro malware: users click OK. Markii inverts it. Scripts are
 sandboxed by default, capabilities are granted individually, and a prompt
 only ever asks about one specific thing, such as network access to one
 specific host. An untrusted note opened from anywhere starts with zero

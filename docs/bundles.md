@@ -10,12 +10,12 @@ live.
 Two problems turn out to be the same problem: where do a note's images live,
 and where does a script too long for the page live? The proven answer, the
 one TextBundle, `.epub`, and `.docx` all use, is a folder with a manifest,
-optionally zipped. Mark adopts it directly.
+optionally zipped. Markii adopts it directly.
 
 ```
 note.mk.md          plain single file: first-class, never deprecated
 
-note.mkbundle/      a bundle: the same note plus everything it needs
+note.mkz/      a bundle: the same note plus everything it needs
   manifest.json     format version, permissions, script declarations
   note.mk.md        the document itself, unchanged syntax
   assets/           images and attachments
@@ -31,9 +31,10 @@ object.
 ## Two forms, one bundle
 
 The directory form is the working form: it diffs in git, greps, and opens
-with any tool. The zip form, a single `note.mkbundle` file, is the
+with any tool. The zip form, a single `note.mkz` file, is the
 interchange form, one artifact to send someone. An application treats them
-identically.
+identically. Bundles from earlier releases used the longer `.mkbundle`
+extension; applications keep recognizing it, but new bundles are `.mkz`.
 
 ## The cache is disposable
 
@@ -62,7 +63,7 @@ sanctioned one.
 
 ## Vaults
 
-A vault is just a directory of notes: `.mk.md` files and `.mkbundle` bundles
+A vault is just a directory of notes: `.mk.md` files and `.mkz` bundles
 side by side, plus at most one optional extra, a vault library of shared Lua
 modules (see [scripting.md](scripting.md)). Nothing else lives there.
 

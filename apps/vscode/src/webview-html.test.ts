@@ -6,7 +6,7 @@ const BASE_OPTIONS = {
   styleUri: 'https://example.test/main.css',
   cspSource: 'https://example.test',
   nonce: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
-  title: 'Mark Preview',
+  title: 'Markii Preview',
 };
 
 /** Extracts the `content="..."` value of the CSP meta tag from a built HTML document. */

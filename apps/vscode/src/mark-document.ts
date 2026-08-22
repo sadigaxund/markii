@@ -6,13 +6,13 @@
  * a `*.test.ts` file exercises may import it.
  */
 
-/** The canonical Mark file extension, matching `package.json`'s `contributes.languages[0].extensions`. */
+/** The canonical Markii file extension, matching `package.json`'s `contributes.languages[0].extensions`. */
 export const MARK_EXTENSION = '.mk.md';
 
 /**
  * True when `fileName` ends with `.mk.md` (case-insensitively) AND has a
  * non-empty base name before it — a bare `.mk.md` with nothing in front
- * (no author-chosen name) is rejected, not treated as a valid Mark file.
+ * (no author-chosen name) is rejected, not treated as a valid Markii file.
  */
 export function isMarkFileName(fileName: string): boolean {
   const lower = fileName.toLowerCase();
@@ -21,7 +21,7 @@ export function isMarkFileName(fileName: string): boolean {
 }
 
 /** Shown when a document has no usable base name (an unsaved buffer whose URI path is empty). */
-export const FALLBACK_PREVIEW_TITLE = 'Mark Preview';
+export const FALLBACK_PREVIEW_TITLE = 'Markii Preview';
 
 /**
  * The webview panel's tab title for the document at `uriPath` — "Preview

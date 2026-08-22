@@ -33,8 +33,8 @@ function trustDeclared(manifest: BundleManifest) {
 describe('createScriptView — default grant (no 3rd argument)', () => {
   it('DEFECT 10: denies everything by default even when the manifest declares full permissions', () => {
     // No 3rd argument at all — the untrusted-by-default case. A hostile
-    // .mkbundle declaring every permission it can think of must not be able
-    // to self-grant just by asking.
+    // .mkz bundle (or a legacy .mkbundle one) declaring every permission it
+    // can think of must not be able to self-grant just by asking.
     const manifest = manifestWith({
       bundle: ['read', 'write:cache/'],
     });

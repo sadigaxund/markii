@@ -180,7 +180,7 @@ export function App(): ReactElement {
     <div className="playground">
       <header className="playground__header">
         <div className="playground__header-text">
-          <h1>Mark II Playground</h1>
+          <h1>Markii Playground</h1>
           <p>
             A thin harness for viewing .mk.md source next to its rendered
             output.
@@ -197,7 +197,7 @@ export function App(): ReactElement {
           href="https://github.com/sadigaxund/markii"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="Mark on GitHub"
+          aria-label="Markii on GitHub"
         >
           <GitHubMark />
           <span className="playground__repo-link-label">GitHub</span>

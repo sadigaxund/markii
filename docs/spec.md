@@ -1,4 +1,4 @@
-# Mark specification: the normative core
+# Markii specification: the normative core
 
 This page collects the rules an implementation must follow. The surrounding
 pages explain the same material for humans, with rationale and examples;
@@ -6,13 +6,12 @@ when wording differs, this page and the conformance corpus win. Key words
 MUST, SHOULD, and MAY are used in their usual normative sense.
 
 The spec is versioned with plain semver and is currently pre-1.0. The
-format's name, Mark (branded Mark II in titles), carries no version
-information. A bundle records the
-spec version it targets in its manifest's required `mark` field.
+format's name, Markii, carries no version information. A bundle records
+the spec version it targets in its manifest's required `mark` field.
 
 ## 1. Document syntax
 
-A Mark document is UTF-8 text: CommonMark, plus GFM tables, task lists,
+A Markii document is UTF-8 text: CommonMark, plus GFM tables, task lists,
 strikethrough, and autolinks, plus the three generic directive forms:
 
 - inline `:name[label]{attrs}`
@@ -181,7 +180,9 @@ offered without it. In-process limits are best-effort by design.
 
 A bundle is a directory, or a zip of that directory, containing
 `manifest.json`, the document, and optionally `assets/`, `scripts/`, and
-`.cache/`. The two forms are equivalent. `.cache/` is disposable;
+`.cache/`. The two forms are equivalent, and both carry the `.mkz`
+extension. An implementation SHOULD also recognize the legacy
+`.mkbundle` name. `.cache/` is disposable;
 deleting it MUST NOT lose authored content.
 
 Scripts see only their own bundle. Paths are resolved inside the bundle

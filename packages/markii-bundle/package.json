@@ -1,7 +1,7 @@
 {
   "name": "@markii/bundle",
   "version": "0.3.1",
-  "description": "Bundle (.mkbundle) storage and policy layer for Mark: manifest handling, the bundle-relative path-jail, zip (fflate) and Node directory storage forms, and a capability-restricted script view. No React, no parsing.",
+  "description": "Bundle (.mkz, formerly .mkbundle) storage and policy layer for Markii: manifest handling, the bundle-relative path-jail, zip (fflate) and Node directory storage forms, and a capability-restricted script view. No React, no parsing.",
   "keywords": [
     "markdown",
     "mark",

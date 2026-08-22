@@ -1,6 +1,6 @@
 # The document format
 
-Mark is markdown with one extra rule. A Mark document is a plain text file,
+Markii is markdown with one extra rule. A Markii document is a plain text file,
 readable in any editor, that can also carry your own components: callouts,
 tabs, charts, anything you register. This page explains everything a document
 can contain. You don't need to be a programmer to read it.
@@ -11,11 +11,11 @@ The base language is CommonMark plus the GitHub extensions: tables, task
 lists, strikethrough, and autolinks. Any markdown you already know works
 unchanged. The file extension is `.mk.md`. Because the real suffix is `.md`,
 every editor and every markdown viewer on earth already opens the file and
-shows readable text. Mark-aware tools recognize the `.mk` part and render the
+shows readable text. Markii-aware tools recognize the `.mk` part and render the
 components too.
 
-That is the design ethos in one sentence: a Mark document must survive
-outside Mark. Everything below is built to degrade into readable plain
+That is the design ethos in one sentence: a Markii document must survive
+outside Markii. Everything below is built to degrade into readable plain
 markdown when opened in a tool that has never heard of the format.
 
 ## Directives: the one extra rule
@@ -138,7 +138,7 @@ rendered as ordinary markdown. Nothing crashes and nothing disappears.
 
 This matters more than it sounds. It is what lets you share a note with
 someone who has fewer components installed than you, and what lets old
-documents open in new tools. A Mark document is tolerant like markdown, not
+documents open in new tools. A Markii document is tolerant like markdown, not
 brittle like code.
 
 ## Attributes are configuration, not content
@@ -315,25 +315,24 @@ Links between notes are ordinary relative markdown links, like
 `[roadmap](./roadmap.mk.md)`. They work in every viewer today. Wiki-style
 `[[links]]` are an application feature, not part of the format. So that
 promoting a note to a bundle doesn't break links pointing at it, a link to
-`./x.mk.md` should resolve to `./x.mkbundle` when a bundle of that name
+`./x.mk.md` should resolve to `./x.mkz` when a bundle of that name
 exists.
 
 ## One file or a bundle
 
 A single `.mk.md` file is first-class and never deprecated. When a note
 accumulates images, long scripts, or data that should travel with it, it can
-be promoted to a `.mkbundle` bundle: a folder (or a zip of that folder)
+be promoted to a `.mkz` bundle: a folder (or a zip of that folder)
 holding the document plus its assets. See [bundles.md](bundles.md).
 
 ## The name
 
-The format is called Mark, and the brand it ships under is Mark II, which is the
-same pun the `@markii` npm scope spells out. The two are used consistently:
-product-facing titles (the repository, the documentation, the VS Code
-extension, the playground) say Mark II, while running prose and the format
-name itself say Mark: "a Mark document", never "a Mark II document". The
-file extension is `.mk.md` and bundles are `.mkbundle`.
+The format is called Markii, and it is one name everywhere: the titles,
+the running prose, the `@markii` npm scope, and the repository all spell
+it the same way. You write "a Markii document". The file extension is
+`.mk.md`, and bundles are `.mkz`.
 
-The name carries no version: the spec uses ordinary semantic versioning,
-and the "II" is the Iron Man suit motif, flavor rather than a version
-scheme. Do not read Mark II as "version 2".
+Pronounce it like "marquee". The name grew out of "Mark II", the Iron Man
+suit motif, but the II is flavor rather than a version: the spec uses
+ordinary semantic versioning, and the trailing letters carry no number.
+Earlier releases called the format "Mark"; only the name changed.

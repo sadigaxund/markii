@@ -1,7 +1,7 @@
 {
   "name": "markii-vscode",
-  "displayName": "Mark II",
-  "description": "Preview for Mark (.mk.md) documents: CommonMark plus directives that render components.",
+  "displayName": "Markii",
+  "description": "Preview for Markii (.mk.md) documents: CommonMark plus directives that render components.",
   "version": "0.3.1",
   "private": true,
   "license": "MIT",
@@ -36,7 +36,7 @@
       {
         "command": "markii.openPreview",
         "title": "Open Preview",
-        "category": "Mark",
+        "category": "Markii",
         "icon": "$(open-preview)"
       }
     ],

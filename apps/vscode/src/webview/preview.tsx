@@ -47,7 +47,11 @@ export class PreviewErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error('Mark preview failed to render:', error, info.componentStack);
+    console.error(
+      'Markii preview failed to render:',
+      error,
+      info.componentStack,
+    );
   }
 
   componentDidUpdate(prevProps: PreviewErrorBoundaryProps): void {

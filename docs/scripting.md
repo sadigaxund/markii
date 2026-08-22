@@ -1,6 +1,6 @@
 # Scripting
 
-A Mark document can fetch data, transform it, and display it, without turning
+A Markii document can fetch data, transform it, and display it, without turning
 into a program. This page explains the whole scripting model: how scripts
 run, where their values go, and how code is shared between notes. It assumes
 you've read [format.md](format.md).

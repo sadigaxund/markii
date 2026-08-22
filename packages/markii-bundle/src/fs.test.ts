@@ -292,7 +292,7 @@ describe('openDirBundle — ESCAPE 3: hard links defeat the root boundary', () =
     skip,
   }) => {
     const parent = await makeTmpDir('markii-bundle-escape3-parent-');
-    const bundleDir = join(parent, 'b.mkbundle');
+    const bundleDir = join(parent, 'b.mkz');
     await mkdir(join(bundleDir, 'cache'), { recursive: true });
     const victimPath = join(parent, 'victim.txt');
     await writeFile(victimPath, 'original victim content', 'utf8');
@@ -355,6 +355,24 @@ describe('openDirBundle — ESCAPE 3: hard links defeat the root boundary', () =
 describe('promoteToBundle', () => {
   it('scaffolds note.mk.md and manifest.json', async () => {
     const dir = await makeTmpDir('markii-bundle-fs-');
+    const targetDir = join(dir, 'my-note.mkz');
+    await promoteToBundle('# My Note\n\nHello.', targetDir, '0.1.0');
+
+    expect(await readFile(join(targetDir, 'note.mk.md'), 'utf8')).toBe(
+      '# My Note\n\nHello.',
+    );
+    const manifestRaw = await readFile(
+      join(targetDir, 'manifest.json'),
+      'utf8',
+    );
+    expect(JSON.parse(manifestRaw)).toEqual({ mark: '0.1.0' });
+  });
+
+  it('works identically under a legacy .mkbundle directory name', async () => {
+    // The directory storage form never inspects its own path's extension —
+    // .mkz is the name new tooling writes, but a directory that still ends
+    // in the legacy .mkbundle keeps working exactly the same way.
+    const dir = await makeTmpDir('markii-bundle-fs-legacy-');
     const targetDir = join(dir, 'my-note.mkbundle');
     await promoteToBundle('# My Note\n\nHello.', targetDir, '0.1.0');
 

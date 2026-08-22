@@ -1,4 +1,4 @@
-# Integrating Mark
+# Integrating Markii
 
 This page is for developers: embedding the reference libraries in an
 application, writing a renderer of your own, and what a host application is
@@ -6,7 +6,7 @@ responsible for. Users never read this; they install an app.
 
 ## The standard is the spec plus the corpus
 
-Mark follows the CommonMark model of standardization: the definition is the
+Markii follows the CommonMark model of standardization: the definition is the
 written spec together with a corpus of example documents that every
 implementation must reproduce. The reference TypeScript libraries are one
 implementation, not the standard itself.
@@ -15,9 +15,9 @@ The corpus lives in `conformance/` as plain data: each fixture pairs a
 `.mk.md` input with its expected syntax tree as JSON, plus behavioral cases
 such as "directives inside code fences must not parse" and "an unclosed
 container must not throw". A Rust, Swift, or Python implementation tests
-against the same files. Passing the corpus is what "supports Mark" means.
+against the same files. Passing the corpus is what "supports Markii" means.
 
-Mark inherits its hard parts rather than inventing them. The syntax is
+Markii inherits its hard parts rather than inventing them. The syntax is
 CommonMark plus GFM plus the generic directive proposal, and the syntax-tree
 node shapes come from the existing `mdast` directive utilities. Parsers for
 all of this already exist in several ecosystems.
@@ -30,7 +30,7 @@ Levels keep a minimal viewer cheap to build, and honest about what it does:
 |---|---|---|
 | L0 | parses documents to the standard tree | `@markii/core` |
 | L1 | renders with registry, fallback, and purity rules | `@markii/react`, contracts in `@markii/stdlib` |
-| L2 | opens `.mkbundle` bundles | `@markii/bundle` |
+| L2 | opens `.mkz` bundles | `@markii/bundle` |
 | L3 | runs scripts under the capability model | `@markii/runtime` + `@markii/lua` |
 
 A read-only viewer can ship at L1 and say so. The normative requirements for
@@ -47,7 +47,7 @@ viewer, a Vue application, and a static HTML exporter can all conform.
 
 ## Embedding the reference libraries
 
-Only developers embedding Mark take npm dependencies; end users install an
+Only developers embedding Markii take npm dependencies; end users install an
 application. The split is:
 
 - `@markii/core`: text to syntax tree, directive tagging, URL sanitizing,

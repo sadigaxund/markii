@@ -1,6 +1,6 @@
-# Mark II for VS Code
+# Markii for VS Code
 
-Preview for Mark (`.mk.md`) documents: CommonMark plus a small directive
+Preview for Markii (`.mk.md`) documents: CommonMark plus a small directive
 syntax that renders components: callouts, cards, tabs, dashboard stats,
 and more. See the
 [format guide](https://github.com/sadigaxund/markii/blob/main/docs/format.md)
@@ -15,9 +15,9 @@ No setup. After installing the extension:
 2. Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>
    (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> on macOS). You can also
    click the preview icon at the right of the editor title bar, or run
-   **Mark: Open Preview** from the command palette.
+   **Markii: Open Preview** from the command palette.
 
-In a `.mk.md` file that shortcut opens the Mark preview; in a plain `.md`
+In a `.mk.md` file that shortcut opens the Markii preview; in a plain `.md`
 file it still opens VS Code's built-in markdown preview, unchanged.
 
 The preview opens beside the editor, follows whichever `.mk.md` file is
@@ -26,7 +26,7 @@ active, updates as you type, and matches your VS Code theme.
 Something to paste into a new file to see it work:
 
 ```markdown
-# Hello Mark
+# Hello Markii
 
 :::callout{type=warning title="It works"}
 This is a **component**, not plain markdown.

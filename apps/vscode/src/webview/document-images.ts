@@ -1,7 +1,7 @@
 /**
  * Resolving document-relative image sources in the preview webview.
  *
- * A Mark document can reference an image sitting next to it —
+ * A Markii document can reference an image sitting next to it —
  * `:::figure{src="nice.png"}` or plain `![](nice.png)`. Inside a webview
  * those relative URLs would resolve against the webview's own opaque origin
  * (`vscode-webview://<uuid>/`), which holds nothing, so they simply never

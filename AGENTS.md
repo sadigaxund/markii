@@ -1,7 +1,7 @@
-# Mark (.mk.md)
+# Markii (.mk.md)
 
 An extensible markdown format: CommonMark + generic directives that render the
-author's own React components. **The product is the file format and its reference
+author's own components. **The product is the file format and its reference
 library — not an app.** Read the `docs/` pages before writing any code —
 `docs/spec.md` is the normative core and, with the topic pages beside it, the
 source of truth for syntax, architecture, and scope.
@@ -9,10 +9,11 @@ source of truth for syntax, architecture, and scope.
 This file is the single project-instruction file for all agents and tools.
 `CLAUDE.md` is a pointer stub — never add content there.
 
-Naming policy (user-set 2026-08-18): product-facing TITLES say **Mark II**
-(README title, docs index, extension display name, playground); running
-prose and the format name say **Mark** ("a Mark document"). Never treat
-"II" as a version — spec versioning is plain semver.
+Naming policy (user-set 2026-08-22): the product is **Markii** — one name
+everywhere (titles, prose, "a Markii document"); pronounced like marquee.
+The earlier Mark / "Mark II in titles" split is retired. Files are
+`.mk.md`, bundles are `.mkz` (legacy `.mkbundle` still recognized).
+Spec versioning is plain semver; the trailing "ii" is not a version.
 
 ## Product principles (binding)
 
@@ -23,7 +24,7 @@ who they serve — with the third acting as the overriding scope test:
    surface-level scripting at most, and mainly enjoy the added components.
    Anything that makes the simple case harder is wrong.
 2. **Power users are served through bundles and shared code.** Complex
-   workflows live in `.mkbundle`; shared Lua is maintained once (vault
+   workflows live in `.mkz` bundles; shared Lua is maintained once (vault
    library or pack) and `require`d everywhere; dashboard-like monitoring
    notes are a first-class use case.
 3. **Cleanliness (the overriding rule).** The file system and the rendered
@@ -63,7 +64,7 @@ packages/markii-stdlib  standard component contracts (docs/integration.md) — n
                         zero deps, no React; the seam every renderer implements against:
   src/contracts.ts   ComponentKind/AttributeSchema/ComponentContract types,
                      STANDARD_COMPONENTS (callout/kbd/rating), getContract()
-packages/markii-bundle  .mkbundle bundle handling (docs/bundles.md, L2) — no React, no parsing:
+packages/markii-bundle  .mkz bundle handling (docs/bundles.md, L2) — no React, no parsing:
   src/manifest.ts    manifest.json types + hand-rolled validation (no schema deps)
   src/paths.ts       path-jail: bundle-relative path normalization/rejection
   src/zip.ts         zip form via fflate (browser-safe main entry)
@@ -78,7 +79,7 @@ packages/markii-lua     Lua sandbox runtime (docs/security.md, L3) — no React,
   src/sandbox.ts     runScript(): assemble env + limits + caps, run, marshal result
   src/executor.ts    createLuaExecutor(): adapts runScript to @markii/runtime's ScriptExecutor
 apps/playground      thin Vite dev harness to view .mk.md files. NOT the product.
-apps/vscode          the "Mark" VS Code extension (v1: preview only) — an
+apps/vscode          the "Markii" VS Code extension (v1: preview only) — an
                      app/consumer of @markii/react, never a renderer:
   src/extension.ts   activation + the markii.openPreview command
   src/preview-panel.ts  the single webview panel; with extension.ts the ONLY

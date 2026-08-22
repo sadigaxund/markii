@@ -27,8 +27,9 @@ export interface ScriptView {
  * trust (their own note, a dev/test harness) — but it must always be an
  * explicit, named opt-in at the call site, never `createScriptView`'s
  * default. See the DEFECT-10 note on `createScriptView` for why: an
- * untrusted `.mkbundle` opened from elsewhere must never be able to grant
- * itself capabilities merely by declaring them in its own manifest.
+ * untrusted `.mkz` bundle (or its legacy `.mkbundle` counterpart) opened
+ * from elsewhere must never be able to grant itself capabilities merely by
+ * declaring them in its own manifest.
  */
 export function grantAllDeclaredPermissions(
   manifest: BundleManifest,
@@ -41,7 +42,7 @@ export function grantAllDeclaredPermissions(
  *
  * DEFECT 10 / spec §10: "Capabilities are declared in the manifest, granted
  * by the user" — declaring is not granting. `manifest.permissions` is
- * whatever the (possibly untrusted) `.mkbundle` *asks for*; `grantedPermissions`
+ * whatever the (possibly untrusted) `.mkz` bundle *asks for*; `grantedPermissions`
  * is whatever the user has actually *approved* for this note (e.g. via a
  * permission-prompt UI, remembered per note and re-prompted if scripts
  * change — see §10). The capability this view actually exposes is the
