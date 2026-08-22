@@ -75,6 +75,36 @@ nothing errors: the parser pairs the fences it can and leaves any stray
 The syntax comes from the CommonMark "generic directives" proposal, so it is
 shared with other markdown tools rather than invented here.
 
+### Closing containers
+
+Two pairing rules decide which fence closes what. A bare closing fence
+closes the innermost container that is still open. And when a bigger
+enclosing fence arrives, every smaller container still open inside it is
+closed along with it, silently.
+
+The second rule means a forgotten closing fence often goes unnoticed:
+
+```
+::::card
+:::center
+::stat{data=weather.temperature label="now"}
+::::
+```
+
+The `:::center` here is never closed by its author. The final `::::` closes
+it and the card together, and the page looks exactly as intended. That
+forgiveness cuts both ways. Because nothing errors, a document can drift
+into fences that pair differently than you think, and the innermost-close
+rule then produces surprising nesting. Writing several containers at the
+same fence length with omitted closings is the classic trap: they nest by
+order of appearance instead of sitting side by side, and a `:::` you meant
+for one of them closes another.
+
+The practice that avoids all of this is simple: close every container you
+open, and give the outermost container the most colons. The forgiving
+behavior exists so a half-edited document still renders; it is not a style
+to write in.
+
 ## Components and the registry
 
 A directive name means whatever the rendering application says it means. The

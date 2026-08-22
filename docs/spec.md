@@ -25,7 +25,10 @@ leafDirective, and containerDirective, each with `name`, string-valued
 
 Raw HTML MUST NOT be rendered; an implementation drops `html` nodes.
 Directives MUST NOT parse inside code fences. Malformed or unclosed
-directive syntax MUST degrade to text, never to an error. Optional YAML
+directive syntax MUST degrade to text, never to an error. A closing fence
+closes the innermost open container; a container left open MUST be closed
+implicitly when its enclosing container's fence or the end of input
+arrives, never reported as an error. Optional YAML
 frontmatter MAY open a document, delimited by `---` lines, and is
 recognized only as the document's first construct. It MUST parse to a
 distinct metadata node and MUST NOT be rendered. A `---` sequence anywhere

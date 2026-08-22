@@ -1,0 +1,28 @@
+{
+  "children": [
+    {
+      "attributes": {},
+      "children": [
+        {
+          "attributes": {},
+          "children": [
+            {
+              "attributes": {
+                "data": "x.y",
+                "label": "now"
+              },
+              "children": [],
+              "name": "stat",
+              "type": "leafDirective"
+            }
+          ],
+          "name": "center",
+          "type": "containerDirective"
+        }
+      ],
+      "name": "card",
+      "type": "containerDirective"
+    }
+  ],
+  "type": "root"
+}

@@ -1,0 +1,64 @@
+{
+  "children": [
+    {
+      "attributes": {
+        "cols": "3"
+      },
+      "children": [
+        {
+          "attributes": {},
+          "children": [
+            {
+              "attributes": {
+                "title": "Highs"
+              },
+              "children": [
+                {
+                  "attributes": {
+                    "data": "w.week",
+                    "kind": "line"
+                  },
+                  "children": [],
+                  "name": "chart",
+                  "type": "leafDirective"
+                }
+              ],
+              "name": "card",
+              "type": "containerDirective"
+            }
+          ],
+          "name": "cell",
+          "type": "containerDirective"
+        },
+        {
+          "attributes": {},
+          "children": [
+            {
+              "attributes": {
+                "title": "Lows"
+              },
+              "children": [
+                {
+                  "attributes": {
+                    "data": "w.lows",
+                    "kind": "bar"
+                  },
+                  "children": [],
+                  "name": "chart",
+                  "type": "leafDirective"
+                }
+              ],
+              "name": "card",
+              "type": "containerDirective"
+            }
+          ],
+          "name": "cell",
+          "type": "containerDirective"
+        }
+      ],
+      "name": "row",
+      "type": "containerDirective"
+    }
+  ],
+  "type": "root"
+}
